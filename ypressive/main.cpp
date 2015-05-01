@@ -10,384 +10,11 @@
 #include <memory>
 #include <vector>
 
-class A
-{
-public:
-    A() {}
-    ~A() {}
-
-private:
-    int i;
-};
-
-template <typename T>
-class msp
-{
-public:
-    template <typename Y>
-    explicit msp(Y* y) // exceptions????
-        : ptr(y)
-    {
-        cb = new Cb;
-        cb->count = 1;
-        cb->ptr = y;
-    }
-
-    ~msp()
-    {
-        if (--cb->count)
-        {
-            std::cout << "we don't leak" << std::endl;
-            delete cb->ptr;
-            delete cb;
-        }
-    }
-
-    msp(const msp<T>& c)
-    {
-        cb = c.cb;
-        ptr = c.ptr;
-        if (cb)
-        {
-            ++cb->count;
-        }
-    }
-
-    void swap(msp<T>& o)
-    {
-        std::swap(ptr, o.ptr);
-        std::swap(cb, o.cb);
-    }
-
-    msp<T>& operator=(const msp<T>& o)
-    {
-        msp(o).swap(*this);
-        return *this;
-    }
-
-    T* operator->() const
-    {
-        return ptr;
-    }
-
-    T& operator*() const
-    {
-        return *ptr;
-    }
-
-private:
-    struct Cb
-    {
-        int count = 0;
-        T* ptr = nullptr;
-    };
-
-    T* ptr = nullptr;
-    Cb* cb = nullptr;
-};
-
-struct Node
-{
-    Node* next = nullptr;
-    int data;
-    Node(int d, Node* n)
-        : data(d)
-        , next(n)
-    {
-    }
-};
-
-Node* invert(Node& start)
-{
-    Node* prev = nullptr;
-    Node* cur = &start;
-    Node* nxt = start.next;
-
-    while (nxt)
-    {
-        Node* t = nxt->next;
-        nxt->next = cur;
-        cur->next = prev;
-
-        prev = cur;
-        cur = nxt;
-        nxt = t;
-    }
-
-    return cur;
-}
-
-void sortints(std::vector<int> in)
-{
-    int counts[130] = {};
-    for (auto i : in)
-    {
-        ++counts[i];
-    }
-
-    for (size_t i = 0; i < 130; ++i)
-    {
-        for (size_t p = 0; p < counts[i]; ++p)
-        {
-            std::cout << i << " ";
-        }
-    }
-
-    std::cout << std::endl;
-}
-
-/// validate search tree
-struct TreeNode
-{
-    TreeNode* lh = nullptr;
-    TreeNode* rh = nullptr;
-    TreeNode* p = nullptr;
-    int value = 0;
-
-    TreeNode(int v) : value(v) {}
-};
-
-TreeNode* min(TreeNode* root)
-{
-    TreeNode* m = root->lh;
-    if (!m)
-    {
-        return root;
-    }
-
-    while (m->lh)
-    {
-        m = m->lh;
-    }
-
-    return m;
-}
-
-TreeNode* next(TreeNode* cur)
-{
-    if (cur->rh)
-    {
-        return min(cur->rh);
-    }
-
-    while (cur->p && cur == cur->p->rh)
-    {
-        cur = cur->p;
-    }
-
-    if (cur->p)
-    {
-        return cur->p;
-    }
-
-    return nullptr;
-}
-
-bool validate(TreeNode* root)
-{
-    int v = min(root)->value;
-    for (TreeNode* m = min(root); m; m = next(m))
-    {
-        if (v > m->value)
-        {
-            std::cout << std::endl;
-            return false;
-        }
-
-        v = m->value;
-        std::cout << v << " ";
-    }
-
-    std::cout << std::endl;
-    return true;
-}
-
-/// spinlock
-class Spinlock
-{
-public:
-    void Lock()
-    {
-        while (!TryLock()) // todo see boost::spinlock
-        {
-            /// no sleep because of spinlock
-        }
-    }
-
-    bool TryLock()
-    {
-        /// force applying invalidate msgs, we clear our cache
-        /// read value from remote cache (not from store buffer) via read msg if we were invalidated, from local cache if not
-        /// put 1 to store buffer, send invalidate msg and receive immediate acknoledge
-        /// RMW operations guarantee global visibility and serialized with another RMW despite of memory ordering
-        ///
-        return !locked.test_and_set(std::memory_order_acquire);  // sync with prev release
-    }
-
-    void Unlock()
-    {
-        /// force applying stores in store buffer to cache ( after it locked and prev stores are guaranteed in cache)
-        /// send invalidates to other CPUs
-        locked.clear(std::memory_order_release);    // sync with next acquire-ops
-    }
-
-private:
-    std::atomic_flag locked;
-};
-
-int global;
-Spinlock sl;
-void SpinlockTest()
-{
-    int t = 0;
-    //global = 3;     // write
-    sl.Lock();  // mo::acquire: all reads after
-    global = 3;      // write
-    t = global;      // read
-    sl.Unlock();// mo::release: all writes before
-    //t = global;    // read
-
-    std::cout << "Spinlock done" << std::endl;
-}
-
-struct ControlBlock
-{
-    int counter = 1;
-    int weakCounter = 1;
-    int* ptr = nullptr;
-
-    void AddRef()
-    {
-        ++counter;
-    }
-
-    void AddRefWeak()
-    {
-        ++weakCounter;
-    }
-
-    void Release()
-    {
-        if (!--counter) // atomic
-        {
-            Dispose();
-            ReleaseWeak();
-        }
-    }
-
-    void ReleaseWeak()
-    {
-        if (!--weakCounter)
-        {
-            delete this;
-        }
-    }
-
-    void Dispose()
-    {
-        delete ptr;
-    }
-};
-
-template <typename one_type, typename two_type>
-bool dcas(
-    one_type& a, one_type& expecteda, one_type vala,
-    two_type& b, two_type& expectedb, two_type valb
-)
-{
-    return true;
-}
-
-struct SharedPtr
-{
-    SharedPtr() = default;
-
-    SharedPtr(const SharedPtr& copy)
-        : ctrl(copy.ctrl)
-        , ptr(copy.ptr)
-    {
-        ctrl->AddRef();
-    }
-
-    SharedPtr(int* data)
-        : ctrl(new ControlBlock)
-        , ptr(data)
-    {
-        ctrl->ptr = ptr;
-    }
-
-    ~SharedPtr()
-    {
-        if (ctrl)
-        {
-            ctrl->Release();
-        }
-    }
-
-    void reset(int* data)
-    {
-        SharedPtr copy(data);
-        swap(copy);
-    }
-
-    SharedPtr& operator=(const SharedPtr& copy)
-    {
-        SharedPtr temp(copy);
-        swap(temp);
-        return *this;
-    }
-
-    int operator*()
-    {
-        return *ptr;
-    }
-
-    int* operator->()
-    {
-        return ptr;
-    }
-
-    void swap(SharedPtr& copy)
-    {
-        std::swap(copy.ctrl, ctrl);
-        std::swap(copy.ptr, ptr);
-    }
-
-    void atomic_swap(SharedPtr copy)
-    {
-        ControlBlock* tctrl = nullptr;
-        int* tptr = nullptr;
-        /// else sp is null
-
-        /// problem: ctrl could have been deleted while manipulating
-        bool res = false;
-        do {
-            tctrl = ctrl;
-            if (tctrl)
-            {
-                tctrl->AddRef();
-            }
-
-            tptr = tctrl ? tctrl->ptr : nullptr;
-            res = dcas(ctrl, tctrl, copy.ctrl,
-                       ptr, tptr, copy.ptr);
-
-            if (tctrl)
-            {
-                tctrl->Release();
-            }
-        } while(res);
-    }
-
-    ControlBlock* ctrl = nullptr;
-    int* ptr = nullptr;
-};
-
 /*
-    ctx.Search().Offers(ShopId, CMagicId, OfferId).GroupBy(ShopId, OfferId)
+    ctx.Search().Offers(ShopId, CMagicId, OfferId).Group(ShopId, OfferId)
         .Where(Text.Contains("hello") && OfferId.OneOf(1,2,3));
         
-    ctx.Search().Clusters(Id, Title).GroupBy(Id)
+    ctx.Search().Clusters(Id, Title).Group(Id)
         .Where(
             Text.Contains(cgi.Text) 
             && Params.Match(cgi.GLFilters)
@@ -395,7 +22,7 @@ struct SharedPtr
             && Category.OneOf(cgi.hid)
         );
         
-    ctx.Search().Models(Id, Title, Picture).GroupBy(Id)
+    ctx.Search().Models(Id, Title, Picture).Group(Id)
     
     result = ctx.Execute();
     
@@ -417,13 +44,18 @@ struct SharedPtr
 struct TSearchImpl {
     void requestAttr(const char* attr) { std::cout << "Request attr: " << attr << std::endl; }
     void requestGroup(const char* group, int cache) { std::cout << "Request group (" << cache << "): " << group << std::endl; }
-    int readProperty(int id, const char* attr) {
+
+    int readProperty(int idx, const char* group, const char* attr) {
         if (!search_finished) {
             search_finished = true;
             search();
         }
 
-        std::cout << "Read property " << attr << " from doc 1" << std::endl; return 0;
+        std::cout << "Read property " << attr << " from doc " << idx << ":" << group << std::endl; return 0;
+    }
+
+    int totalDocs(const char* group) {
+        return 3;
     }
 
 public:
@@ -433,90 +65,139 @@ public:
 };
 
 struct TProperty {
-    TProperty(TSearchImpl* impl = nullptr) : Impl(impl) {}
+    TProperty(TSearchImpl* impl = nullptr, const char* group = nullptr) : Impl(impl), GroupName(group) {}
     TSearchImpl* Impl;
+    const char* GroupName;
+
+    int read(int idx, const char* name) {
+        return Impl->readProperty(idx, GroupName, name);
+    }
 };
 
-struct TOfferId : public virtual TProperty {
+struct TOfferId : public virtual TProperty
+{
     static void Request(TSearchImpl* impl) { impl->requestAttr("offer_id");}
 
     /// have only attrs with support groupping
     static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("offer_id", cache);}
 
+    constexpr static const char* Name = "offer_id";
+
     /// ytodo support index
-    int OfferId() { return Impl->readProperty(0, "offer_id"); }
+    int OfferId() { return read(0, "offer_id"); }
 };
 
 struct TShopId : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("shop_id"); }
-    int ShopId() { return Impl->readProperty(0, "shop_id"); }
+    int ShopId() { return read(0, "shop_id"); }
+    constexpr static const char* Name = "shop_id";
+};
+
+struct TTitle : public virtual TProperty {
+    static void Request(TSearchImpl* impl) { impl->requestAttr("title"); }
+    int Title() { return read(0, "title"); }
+    constexpr static const char* Name = "title";
 };
 
 struct TMagicId : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("magic_id"); }
     static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("magic_id", cache);}
+    constexpr static const char* Name = "magic_id";
 
     /// todo separate to another class
-    int MagicId() { return Impl->readProperty(0, "magic_id"); }
+    int MagicId() { return read(0, "magic_id"); }
+};
+
+template <typename TAttr>
+struct TAttrType {
+    using Type = TAttr;
 };
 
 /// can be ptr, but need remove_pointer treat
-static TShopId ShopId;
-static TOfferId OfferId;
-static TMagicId MagicId;
+static TAttrType<TShopId> ShopId;
+static TAttrType<TOfferId> OfferId;
+static TAttrType<TMagicId> MagicId;
+static TAttrType<TTitle> Title;
 
-template <typename TAttr>
-struct TByAttr {
-    TByAttr(int cache) : Cache(cache) {}
-
-    void Group(TSearchImpl* impl) {
-        TAttr::Group(impl, Cache);
-    }
-
-    int Cache;
+struct TGroupBase {
+    TGroupBase(TSearchImpl* impl) : Impl(impl) {}
+    TSearchImpl* Impl;
 };
 
-template <typename TAttr>
-TByAttr<TAttr> By(TAttr, int cache) {
-    return {cache};
-}
+template <typename TRequestAttrs>
+struct TDocAccessor : public TRequestAttrs {
+    TDocAccessor(TSearchImpl* impl, const char* name) : TProperty(impl, name) {}
 
-template <typename... TArgs>
-struct TGroupAttributes : public TArgs... {
-    static void Apply(TSearchImpl* impl) {
-        [=](...){ }((TArgs::Group(impl, 1), 0)...);
-    }
 };
 
 template <typename TRequestAttrs, typename TGroupAttrs>
 struct TSearchResult {
-    TSearchResult(TSearchImpl* impl) {
-        TGroupAttrs::Apply(impl);
-        TRequestAttrs::Apply(impl);
+    TSearchResult(TSearchImpl* impl) : Impl(impl) {
     }
 
     template <typename TGroup>
-    void GrouppedBy(TGroup) {
+    TDocAccessor<TRequestAttrs> Group(TGroup) {
         /// is parent of trait
         TGroupAttrs* fake;
         (void)static_cast<TGroup*>(fake);
+
+        return TDocAccessor<TRequestAttrs>(Impl, TGroup::Type::Name);
     }
+
+    TSearchImpl* Impl;
+};
+
+template <typename TParent, typename TAttr, typename TPrev>
+struct TGroupAttr : public TParent, public TAttr {
+    using TThis = TGroupAttr<TParent, TAttr, TPrev>;
+
+    TGroupAttr(TSearchImpl* impl) : TParent(impl) {}
+
+    template <typename TGroup>
+    TGroupAttr<TThis, TGroup, TPrev> By(TGroup, int cache) {
+        TGroup::Type::Group(TGroupBase::Impl, cache);
+        return {TGroupBase::Impl};
+    }
+
+    TSearchResult<TPrev, TThis> End() {
+        return {TGroupBase::Impl};
+    }
+};
+
+template <typename TPrev>
+struct TGroupContext {
+    TGroupContext(TSearchImpl* impl) : Impl(impl) {}
+
+    template <typename TAttr>
+    TGroupAttr<TGroupBase, TAttr, TPrev> By(TAttr, int cache) {
+        TAttr::Type::Group(Impl, cache);
+        return {Impl};
+    }
+
+    TSearchImpl* Impl;
+};
+
+template <typename... TArgs>
+struct TRequestAttrTypes : public TArgs... {
 };
 
 /// rename
 template <typename... TArgs>
 struct TRequestAttrubutes : public TArgs... {
     using TThis = TRequestAttrubutes<TArgs...>;
-    TRequestAttrubutes(TSearchImpl* impl) : TProperty(impl) {}
+    using TTypedThis = TRequestAttrTypes<typename TArgs::Type...>;
+    TRequestAttrubutes(TSearchImpl* impl) : Impl(impl) {}
 
     static void Apply(TSearchImpl* impl) {
-        [=](...){ }((TArgs::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
+        [=](...){ }((TArgs::Type::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
     }
 
-    template <typename... TGrAttrs>
-    TSearchResult<TThis, TGroupAttributes<TGrAttrs...>> Group(TGrAttrs...) {
-        return {TProperty::Impl};
+    TGroupContext<TTypedThis> Group() {
+        Apply(Impl);
+        return {Impl};
     }
+
+    TSearchImpl* Impl;
 };
 
 struct TSelectContext {
@@ -556,16 +237,27 @@ struct TSearchSession {
 int main(int argc, const char * argv[])
 {
     TSearchSession ctx;
-    auto result = ctx.Select().Offers(OfferId, ShopId).Group(MagicId, OfferId);
-    result.GrouppedBy(OfferId);
-    result.GrouppedBy(MagicId);
+    auto result = ctx
+        .Select()
+            .Offers(OfferId, ShopId, Title)
+        .Group()
+            .By(MagicId, 1)
+            .By(OfferId, 2)
+        .End();
 
-    //auto offers = result.GrouppedBy(MagicId);
-    //offers.OfferId();
-    (void)result;
+    result.Group(OfferId).ShopId();
+    result.Group(MagicId).Title();
 
-//    auto models = ctx.Search().Models(ShopId);
-//    models.ShopId();
+    /*auto groups = result.Group(MagicId);
+    for (auto group : groups) {
+        for (auto offer : group) {
+            offer.OfferId();
+        }
+    }
+    
+    if (groups.Single() || groups.Empty()) {
+    }
+    */
 
     return 0;
 }
