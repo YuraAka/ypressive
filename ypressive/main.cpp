@@ -441,7 +441,7 @@ struct TOfferId : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("offer_id");}
 
     /// have only attrs with support groupping
-    void Group(int cache) { Impl->requestGroup("offer_id", cache);}
+    static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("offer_id", cache);}
 
     /// ytodo support index
     int OfferId() { return Impl->readProperty(0, "offer_id"); }
@@ -454,8 +454,10 @@ struct TShopId : public virtual TProperty {
 
 struct TMagicId : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("magic_id"); }
+    static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("magic_id", cache);}
+
+    /// todo separate to another class
     int MagicId() { return Impl->readProperty(0, "magic_id"); }
-    void Group(int cache) { Impl->requestGroup("magic_id", cache);}
 };
 
 /// can be ptr, but need remove_pointer treat
@@ -463,118 +465,83 @@ static TShopId ShopId;
 static TOfferId OfferId;
 static TMagicId MagicId;
 
-template <typename TGroup>
-struct TGroupWrapper : public TGroup {
-};
+template <typename TAttr>
+struct TByAttr {
+    TByAttr(int cache) : Cache(cache) {}
 
-template <typename TAttrs>
-struct TSearchResult {
-    TSearchResult(TSearchImpl* impl) : Impl(impl) {}
-    TSearchImpl* Impl;
-
-    template <typename TGroup>
-    void GrouppedBy(TGroup);
-};
-
-template <typename TSource, typename TGroup>
-struct TWithGroup : public TSource, public TGroupWrapper<TGroup> {
-    using TThisType = TWithGroup<TSource, TGroup>;
-    TWithGroup(TSearchImpl* impl, int cache) : TSource(impl)
-    {
-        TGroupWrapper<TGroup>::Group(cache);
+    void Group(TSearchImpl* impl) {
+        TAttr::Group(impl, Cache);
     }
 
-    template <typename TAttr>
-    TWithGroup<TThisType, TAttr> GroupBy(TAttr, int cache) {
-        return TWithGroup<TThisType, TAttr>(TProperty::Impl, cache);
-    }
-
-    TSearchResult<TThisType> Done() {
-        return {TProperty::Impl};
-    }
+    int Cache;
 };
 
-template <typename TAttrs>
-template <typename TGroup>
-void TSearchResult<TAttrs>::GrouppedBy(TGroup) {
-    TAttrs* fake = nullptr;
-    (void)static_cast<TGroupWrapper<TGroup>*>(fake);
-}
-
-template <typename TSource, typename TGroup>
-TWithGroup<TSource, TGroup> AddGroupping(TSearchImpl* impl, int cache) {
-    return {impl, cache};
+template <typename TAttr>
+TByAttr<TAttr> By(TAttr, int cache) {
+    return {cache};
 }
 
 template <typename... TArgs>
 struct TGroupAttributes : public TArgs... {
-    TGroupAttributes(TSearchImpl* impl) : TProperty(impl) {
-        [=](...){ }((TArgs::Group(1), 0)...);
+    static void Apply(TSearchImpl* impl) {
+        [=](...){ }((TArgs::Group(impl, 1), 0)...);
     }
 };
 
 template <typename TRequestAttrs, typename TGroupAttrs>
-struct TSearchResult2 : public TRequestAttrs, public TGroupAttrs {
-    TSearchResult2(TSearchImpl* impl) : TRequestAttrs(impl), TGroupAttrs(impl) {}
+struct TSearchResult {
+    TSearchResult(TSearchImpl* impl) {
+        TGroupAttrs::Apply(impl);
+        TRequestAttrs::Apply(impl);
+    }
 
     template <typename TGroup>
     void GrouppedBy(TGroup) {
+        /// is parent of trait
         TGroupAttrs* fake;
         (void)static_cast<TGroup*>(fake);
     }
-
 };
 
 /// rename
 template <typename... TArgs>
-struct TAttrubutes : public TArgs... {
-    using TThis = TAttrubutes<TArgs...>;
-    TAttrubutes(TSearchImpl* impl) : TProperty(impl) {}
-    static void Request(TSearchImpl* impl) {
+struct TRequestAttrubutes : public TArgs... {
+    using TThis = TRequestAttrubutes<TArgs...>;
+    TRequestAttrubutes(TSearchImpl* impl) : TProperty(impl) {}
+
+    static void Apply(TSearchImpl* impl) {
         [=](...){ }((TArgs::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
     }
 
-    /*template <typename TAttr>
-    TWithGroup<TAttrubutes<TArgs...>, TAttr> GroupBy(TAttr, int cache) {
-        using TThisType = TAttrubutes<TArgs...>;
-        return AddGroupping<TThisType, TAttr>(TProperty::Impl, cache);
-    }*/
-
     template <typename... TGrAttrs>
-    TSearchResult2<TThis, TGroupAttributes<TGrAttrs...>> Group(TGrAttrs...) {
+    TSearchResult<TThis, TGroupAttributes<TGrAttrs...>> Group(TGrAttrs...) {
         return {TProperty::Impl};
     }
 };
 
-struct TSearchCollections {
+struct TSelectContext {
     /// make a request with attrs
     template <typename... TArgs>
-    TAttrubutes<TArgs...> Offers(TArgs...) {
-        auto res = TAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
-        res.Request(&Impl); // can pass flag of offer owner here
-        Impl.search_finished = false;
-        return res;
+    TRequestAttrubutes<TArgs...> Offers(TArgs...) {
+        return TRequestAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
     }
 
     template <typename... TArgs>
-    TAttrubutes<TArgs...> Models(TArgs...) {
-        auto res = TAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
-        res.Request(&Impl); // can pass flag of model owner here
-        Impl.search_finished = false;
-        return res;
+    TRequestAttrubutes<TArgs...> Models(TArgs...) {
+        return TRequestAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
     }
 
     int Clusters;
 
 public:
-    TSearchCollections(TSearchImpl& impl) : Impl(impl) {}
+    TSelectContext(TSearchImpl& impl) : Impl(impl) {}
 
 private:
     TSearchImpl& Impl;
 };
 
 struct TSearchSession {
-    TSearchCollections Select() {
+    TSelectContext Select() {
         return {Impl};
     }
 
@@ -583,13 +550,11 @@ struct TSearchSession {
 
 /// todo:
 /// return document iterator
-/// add groupping
+/// add groupping with cache
 /// optimize query tree
 
 int main(int argc, const char * argv[])
 {
-/// search concept
-
     TSearchSession ctx;
     auto result = ctx.Select().Offers(OfferId, ShopId).Group(MagicId, OfferId);
     result.GrouppedBy(OfferId);
@@ -601,82 +566,6 @@ int main(int argc, const char * argv[])
 
 //    auto models = ctx.Search().Models(ShopId);
 //    models.ShopId();
-
-/// end search concept
-
-    A a;
-    A b(a);
-    a = b;
-
-    msp<int> i(new int(5));
-    msp<int> j = i;
-    std::cout << "j: " << *j << std::endl;
-
-    Node n3(3, nullptr);
-    Node n2(2, &n3);
-    Node n1(1, &n2);
-    Node n0(0, &n1);
-
-    for (Node* i = &n0; i; i = i->next)
-    {
-        std::cout << i->data << ",";
-    }
-
-    std::cout << std::endl;
-
-    Node* inv = invert(n0);
-    for (Node* i = inv; i; i = i->next)
-    {
-        std::cout << i->data << ",";
-    }
-
-    std::cout << std::endl;
-
-    std::vector<int> ints = {1,1,3,1,4,4,4,5,2,1};
-    sortints(ints);
-
-    /// tree
-    TreeNode three(3);
-    TreeNode one(1);
-    TreeNode two(2);
-    TreeNode four(4);
-
-    /*
-        2
-       / \
-      1   3
-           \
-            4
-    */
-    one.p = &two;
-    two.lh = &one;
-
-    three.p = &two;
-    two.rh = &three;
-
-    four.p = &three;
-    three.rh = &four;
-
-    bool valid = validate(&two);
-    std::cout << "Tree is valid: " << valid << std::endl;
-    four.value = 0;
-    valid = validate(&two);
-    std::cout << "Tree is valid: " << valid << std::endl;
-
-    SpinlockTest();
-
-    // dynamic cast from void* is not working
-    /*A1* b1 = new B1;
-    void* bv = b1;
-    B1* b11 = dynamic_cast<B1*>(bv);
-    if (b11)
-    {
-        std::cout << "Cast is successful" << std::endl;
-    }
-    else
-    {
-        std::cout << "Bad cast" << std::endl;
-    }*/
 
     return 0;
 }
