@@ -45,17 +45,26 @@ struct TSearchImpl {
     void requestAttr(const char* attr) { std::cout << "Request attr: " << attr << std::endl; }
     void requestGroup(const char* group, int cache) { std::cout << "Request group (" << cache << "): " << group << std::endl; }
 
-    int readProperty(int idx, const char* group, const char* attr) {
+    int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx) {
         if (!search_finished) {
             search_finished = true;
             search();
         }
 
-        std::cout << "Read property " << attr << " from doc " << idx << ":" << group << std::endl; return 0;
+        std::cout << "Read property " << attr << " from doc(" << docIdx;
+        std::cout << ") in " << group << "[" << groupIdx << "]" << std::endl;
+        return 0;
     }
 
-    int totalDocs(const char* group) {
+    size_t totalDocs(const char* groupName, size_t groupIdx) {
+        (void)groupName;
+        (void)groupIdx;
         return 3;
+    }
+
+    size_t totalGroups(const char* groupName) {
+        (void)groupName;
+        return 4;
     }
 
 public:
@@ -64,13 +73,25 @@ public:
     bool search_finished = false;
 };
 
+/// ytodo check virtual inheritance and default ctor
 struct TProperty {
-    TProperty(TSearchImpl* impl = nullptr, const char* group = nullptr) : Impl(impl), GroupName(group) {}
-    TSearchImpl* Impl;
-    const char* GroupName;
+    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
+        : Impl(impl)
+        , GroupName(group)
+        , GroupIdx(groupIdx)
+        , DocIdx(docIdx)
+    {}
 
-    int read(int idx, const char* name) {
-        return Impl->readProperty(idx, GroupName, name);
+    TProperty() = default;
+
+    TSearchImpl* Impl = nullptr;
+    const char* GroupName = nullptr;
+    size_t GroupIdx = 0;
+    size_t DocIdx = 0;
+
+
+    int read(const char* name) {
+        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx);
     }
 };
 
@@ -84,18 +105,18 @@ struct TOfferId : public virtual TProperty
     constexpr static const char* Name = "offer_id";
 
     /// ytodo support index
-    int OfferId() { return read(0, "offer_id"); }
+    int OfferId() { return read("offer_id"); }
 };
 
 struct TShopId : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("shop_id"); }
-    int ShopId() { return read(0, "shop_id"); }
+    int ShopId() { return read("shop_id"); }
     constexpr static const char* Name = "shop_id";
 };
 
 struct TTitle : public virtual TProperty {
     static void Request(TSearchImpl* impl) { impl->requestAttr("title"); }
-    int Title() { return read(0, "title"); }
+    int Title() { return read("title"); }
     constexpr static const char* Name = "title";
 };
 
@@ -105,7 +126,7 @@ struct TMagicId : public virtual TProperty {
     constexpr static const char* Name = "magic_id";
 
     /// todo separate to another class
-    int MagicId() { return read(0, "magic_id"); }
+    int MagicId() { return read("magic_id"); }
 };
 
 template <typename TAttr>
@@ -126,8 +147,141 @@ struct TGroupBase {
 
 template <typename TRequestAttrs>
 struct TDocAccessor : public TRequestAttrs {
-    TDocAccessor(TSearchImpl* impl, const char* name) : TProperty(impl, name) {}
+    TDocAccessor(TSearchImpl* impl, const char* name, size_t groupIdx, size_t docIdx)
+        : TProperty(impl, name, groupIdx, docIdx) {}
+};
 
+template <typename TRequestAttrs>
+struct TDocIterator {
+    using TElement = TDocAccessor<TRequestAttrs>;
+    using TThis = TDocIterator<TRequestAttrs>;
+
+    TDocIterator(TSearchImpl* impl, const char* groupName, size_t groupIdx, size_t start)
+        : Impl(impl)
+        , Current(impl, groupName, groupIdx, start)
+        , Counter(start)
+        , GroupName(groupName)
+        , GroupIdx(groupIdx)
+    {
+    }
+
+    const TElement& operator*() const {
+        return Current;
+    }
+
+    const TElement* operator->() const {
+        return &Current;
+    }
+
+    TDocIterator& operator++() {
+        Current = TElement(Impl, GroupName, GroupIdx, ++Counter);
+        return *this;
+    }
+
+    bool operator!=(const TThis& other) const {
+        return Counter != other.Counter;
+    }
+
+    bool operator==(const TThis& other) const {
+        return Counter == other.Counter;
+    }
+
+    /// use optional
+    TSearchImpl* Impl;
+    TElement Current;
+    size_t Counter = 0;
+    const char* GroupName = nullptr;
+    size_t GroupIdx = 0;
+};
+
+template <typename TRequestAttrs>
+struct TDocRange {
+    using TIterator = TDocIterator<TRequestAttrs>;
+
+    TDocRange(TSearchImpl* impl, const char* groupName, size_t groupIdx)
+        : Begin(impl, groupName, groupIdx, 0)
+        , End(impl, groupName, groupIdx, impl->totalDocs(groupName, groupIdx))
+    {
+    }
+
+    TIterator begin() const {
+        return Begin;
+    }
+
+    TIterator end() const {
+        return End;
+    }
+
+    TIterator Begin;
+    TIterator End;
+};
+
+template <typename TRequestAttrs>
+struct TDocRangeIterator {
+    using TElement = TDocRange<TRequestAttrs>;
+    using TThis = TDocRangeIterator<TRequestAttrs>;
+
+    TDocRangeIterator(TSearchImpl* impl, const char* groupName, size_t start)
+        : Impl(impl)
+        , Current(impl, groupName, start)
+        , Counter(start)
+        , GroupName(groupName)
+    {
+    }
+
+    const TElement& operator*() const {
+        return Current;
+    }
+
+    const TElement* operator->() const {
+        return &Current;
+    }
+
+    TThis& operator++() {
+        Current = TElement(Impl, GroupName, ++Counter);
+        return *this;
+    }
+
+    bool operator!=(const TThis& other) const {
+        return Counter != other.Counter;
+    }
+
+    bool operator==(const TThis& other) const {
+        return Counter == other.Counter;
+    }
+
+    TSearchImpl* Impl;
+    TElement Current;
+    size_t Counter = 0;
+    const char* GroupName = nullptr;
+};
+
+template <typename TRequestAttrs>
+struct TGroupRange {
+    using TIterator = TDocRangeIterator<TRequestAttrs>;
+
+    TGroupRange(TSearchImpl* impl, const char* groupName)
+        : GroupsCount(impl->totalGroups(groupName))
+        , Begin(impl, groupName, 0)
+        , End(impl, groupName, GroupsCount)
+    {
+    }
+
+    TIterator begin() const{
+        return Begin;
+    }
+
+    TIterator end() const{
+        return End;
+    }
+
+    bool Single() const { return GroupsCount == 1;}
+    bool Empty() const { return GroupsCount == 0;}
+    size_t Size() const { return GroupsCount; }
+
+    size_t GroupsCount = 0;
+    TIterator Begin;
+    TIterator End;
 };
 
 template <typename TRequestAttrs, typename TGroupAttrs>
@@ -135,13 +289,14 @@ struct TSearchResult {
     TSearchResult(TSearchImpl* impl) : Impl(impl) {
     }
 
+    /// why do we need TDocAccessor?
     template <typename TGroup>
-    TDocAccessor<TRequestAttrs> Group(TGroup) {
+    TGroupRange<TRequestAttrs> Group(TGroup) {
         /// is parent of trait
         TGroupAttrs* fake;
         (void)static_cast<TGroup*>(fake);
 
-        return TDocAccessor<TRequestAttrs>(Impl, TGroup::Type::Name);
+        return TGroupRange<TRequestAttrs>(Impl, TGroup::Type::Name);
     }
 
     TSearchImpl* Impl;
@@ -178,21 +333,21 @@ struct TGroupContext {
 };
 
 template <typename... TArgs>
-struct TRequestAttrTypes : public TArgs... {
+struct TSelectTypes : public TArgs... {
 };
 
 /// rename
 template <typename... TArgs>
-struct TRequestAttrubutes : public TArgs... {
-    using TThis = TRequestAttrubutes<TArgs...>;
-    using TTypedThis = TRequestAttrTypes<typename TArgs::Type...>;
-    TRequestAttrubutes(TSearchImpl* impl) : Impl(impl) {}
+struct TSelectNames : public TArgs... {
+    using TThisTypes = TSelectTypes<typename TArgs::Type...>;
+
+    TSelectNames(TSearchImpl* impl) : Impl(impl) {}
 
     static void Apply(TSearchImpl* impl) {
         [=](...){ }((TArgs::Type::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
     }
 
-    TGroupContext<TTypedThis> Group() {
+    TGroupContext<TThisTypes> Group() {
         Apply(Impl);
         return {Impl};
     }
@@ -203,13 +358,13 @@ struct TRequestAttrubutes : public TArgs... {
 struct TSelectContext {
     /// make a request with attrs
     template <typename... TArgs>
-    TRequestAttrubutes<TArgs...> Offers(TArgs...) {
-        return TRequestAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
+    TSelectNames<TArgs...> Offers(TArgs...) {
+        return TSelectNames<TArgs...>(&Impl); /// pass impl to ctor
     }
 
     template <typename... TArgs>
-    TRequestAttrubutes<TArgs...> Models(TArgs...) {
-        return TRequestAttrubutes<TArgs...>(&Impl); /// pass impl to ctor
+    TSelectNames<TArgs...> Models(TArgs...) {
+        return TSelectNames<TArgs...>(&Impl); /// pass impl to ctor
     }
 
     int Clusters;
@@ -245,19 +400,18 @@ int main(int argc, const char * argv[])
             .By(OfferId, 2)
         .End();
 
-    result.Group(OfferId).ShopId();
-    result.Group(MagicId).Title();
-
-    /*auto groups = result.Group(MagicId);
-    for (auto group : groups) {
+    for (auto group : result.Group(MagicId)) {
         for (auto offer : group) {
             offer.OfferId();
         }
     }
-    
-    if (groups.Single() || groups.Empty()) {
+
+    auto groups = result.Group(OfferId);
+    if (groups.Single()) {
+        for (auto group : *groups.begin()) {
+            (void) group;
+        }
     }
-    */
 
     return 0;
 }
