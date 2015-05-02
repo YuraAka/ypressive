@@ -1,11 +1,3 @@
-//
-//  main.cpp
-//  playground
-//
-//  Created by Юра on 07.06.14.
-//  Copyright (c) 2014 yura. All rights reserved.
-//
-
 #include <iostream>
 #include <memory>
 #include <vector>
@@ -59,6 +51,7 @@ struct TSearchImpl {
         return 0;
     }
 
+    // ytodo default behaviour -- return only prefetched
     size_t totalDocs(const char* groupName, size_t groupIdx) {
         (void)groupName;
         (void)groupIdx;
@@ -68,6 +61,14 @@ struct TSearchImpl {
     size_t totalGroups(const char* groupName) {
         (void)groupName;
         return 4;
+    }
+
+    void addCondition(const char* attr, const char* val) {
+        std::cout << "Filter " << attr << " = " << val << std::endl;
+    }
+
+    void addLogicOr() {
+        std::cout << "OR" << std::endl;
     }
 
 public:
@@ -101,57 +102,96 @@ struct TProperty {
 struct TOfferId : public virtual TProperty
 {
     constexpr static const char* Name = "offer_id";
-
-    static void Request(TSearchImpl* impl) { impl->requestAttr(Name);}
-
-    /// have only attrs with support groupping
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(Name, docsToFetch, groupsToFetch);
-    }
-
-    /// ytodo support index
     int OfferId() { return read(Name); }
 };
 
 struct TShopId : public virtual TProperty {
     constexpr static const char* Name = "shop_id";
-
-    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
     int ShopId() { return read(Name); }
 };
 
 struct TTitle : public virtual TProperty {
     constexpr static const char* Name = "title";
-
-    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
     int Title() { return read(Name); }
+};
+
+struct TSalesFlag {
+    constexpr static const char* Name = "sales";
 };
 
 struct TMagicId : public virtual TProperty {
     constexpr static const char* Name = "magic_id";
-
-    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(Name, docsToFetch, groupsToFetch);
-    }
-
-    /// todo separate to another class
     int MagicId() { return read(Name); }
 };
 
 template <typename TAttr>
-struct TAttrType {
+struct TCanSearch {
+};
+
+template <typename TAttr>
+struct TCanRequest {
+    static void Request(TSearchImpl* impl) { impl->requestAttr(TAttr::Name); }
+};
+
+template <typename TAttr>
+struct TCanGroup {
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
+    }
+};
+
+template <typename TAttr, template <typename> class... TTraits>
+struct TAttrTraits : public TTraits<TAttr>... {
     using Type = TAttr;
 };
 
-/// can be ptr, but need remove_pointer treat
-static TAttrType<TShopId> ShopId;
-static TAttrType<TOfferId> OfferId;
-static TAttrType<TMagicId> MagicId;
-static TAttrType<TTitle> Title;
+static TAttrTraits<TShopId, TCanRequest, TCanGroup> ShopId;
+static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
+static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
+static TAttrTraits<TTitle, TCanRequest> Title;
+static TAttrTraits<TSalesFlag, TCanSearch> SalesFlag;
 
-struct TGroupBase {
-    TGroupBase(TSearchImpl* impl) : Impl(impl) {}
+struct TConditionEq {
+    void Apply(TSearchImpl* impl) const {
+        impl->addCondition(Attr, Val);
+    }
+
+    TConditionEq(const char* attr, const char* val) : Attr(attr), Val(val) {}
+    const char* Attr = nullptr;
+    const char* Val = nullptr;
+};
+
+template <typename TCondition1, typename TCondition2>
+struct TConditionOr {
+    void Apply(TSearchImpl* impl) const {
+        Lhs.Apply(impl);
+        impl->addLogicOr();
+        Rhs.Apply(impl);
+    }
+
+    TConditionOr(TCondition1 lhs, TCondition2 rhs)
+        : Lhs(lhs)
+        , Rhs(rhs)
+    {
+    }
+
+    TCondition1 Lhs;
+    TCondition2 Rhs;
+};
+
+template <typename TComparable>
+TConditionEq operator==(TComparable, const char* val) {
+    /// ytodo check for compliance
+    return {TComparable::Type::Name, val};
+}
+
+template <typename TCondition1, typename TCondition2>
+TConditionOr<TCondition1, TCondition2> operator||(TCondition1 lhs, TCondition2 rhs) {
+    return {lhs, rhs};
+}
+
+struct TSearchServiceBase {
+    TSearchServiceBase(TSearchImpl* impl) : Impl(impl) {}
     TSearchImpl* Impl;
 };
 
@@ -312,30 +352,32 @@ struct TSearchResult {
     TSearchImpl* Impl;
 };
 
-template <typename TParent, typename TAttr, typename TPrev>
+template <typename TParent, typename TAttr, typename TRequestAttrs>
 struct TGroupAttr : public TParent, public TAttr {
-    using TThis = TGroupAttr<TParent, TAttr, TPrev>;
+    using TThis = TGroupAttr<TParent, TAttr, TRequestAttrs>;
 
     TGroupAttr(TSearchImpl* impl) : TParent(impl) {}
 
     template <typename TGroup>
-    TGroupAttr<TThis, TGroup, TPrev> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TGroup::Type::Group(TGroupBase::Impl, docsToFetch, groupsToFetch);
-        return {TGroupBase::Impl};
+    TGroupAttr<TThis, TGroup, TRequestAttrs> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TGroup::Group(TSearchServiceBase::Impl, docsToFetch, groupsToFetch);
+        return {TSearchServiceBase::Impl};
     }
 
-    TSearchResult<TPrev, TThis> End() {
-        return {TGroupBase::Impl};
+    template <typename TCondition>
+    TSearchResult<TRequestAttrs, TThis> Where(TCondition cond) {
+        cond.Apply(TSearchServiceBase::Impl);
+        return {TSearchServiceBase::Impl};
     }
 };
 
-template <typename TPrev>
+template <typename TRequestAttrs>
 struct TGroupContext {
     TGroupContext(TSearchImpl* impl) : Impl(impl) {}
 
     template <typename TAttr>
-    TGroupAttr<TGroupBase, TAttr, TPrev> By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TAttr::Type::Group(Impl, docsToFetch, groupsToFetch);
+    TGroupAttr<TSearchServiceBase, TAttr, TRequestAttrs> By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TAttr::Group(Impl, docsToFetch, groupsToFetch);
         return {Impl};
     }
 
@@ -354,7 +396,7 @@ struct TSelectNames : public TArgs... {
     TSelectNames(TSearchImpl* impl) : Impl(impl) {}
 
     static void Apply(TSearchImpl* impl) {
-        [=](...){ }((TArgs::Type::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
+        [=](...){ }((TArgs::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
     }
 
     TGroupContext<TThisTypes> Group() {
@@ -391,6 +433,7 @@ struct TSearchSession {
         return {Impl};
     }
 
+    void ForceRun() {}
     TSearchImpl Impl;
 };
 
@@ -408,7 +451,7 @@ int main(int argc, const char * argv[])
         .Group()
             .By(MagicId, 10, 2)
             .By(OfferId, 3)
-        .End();
+        .Where(SalesFlag == "1" || SalesFlag == "2");
 
     for (auto group : result.Group(MagicId)) {
         for (auto offer : group) {
