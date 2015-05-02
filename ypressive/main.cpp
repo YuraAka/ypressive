@@ -71,6 +71,10 @@ struct TSearchImpl {
         std::cout << "OR" << std::endl;
     }
 
+    void addLogicAnd() {
+        std::cout << "AND" << std::endl;
+    }
+
 public:
     void search() { std::cout << "Perform search" << std::endl; }
 
@@ -124,33 +128,6 @@ struct TMagicId : public virtual TProperty {
     int MagicId() { return read(Name); }
 };
 
-template <typename TAttr>
-struct TCanSearch {
-};
-
-template <typename TAttr>
-struct TCanRequest {
-    static void Request(TSearchImpl* impl) { impl->requestAttr(TAttr::Name); }
-};
-
-template <typename TAttr>
-struct TCanGroup {
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
-    }
-};
-
-template <typename TAttr, template <typename> class... TTraits>
-struct TAttrTraits : public TTraits<TAttr>... {
-    using Type = TAttr;
-};
-
-static TAttrTraits<TShopId, TCanRequest, TCanGroup> ShopId;
-static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
-static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
-static TAttrTraits<TTitle, TCanRequest> Title;
-static TAttrTraits<TSalesFlag, TCanSearch> SalesFlag;
-
 struct TConditionEq {
     void Apply(TSearchImpl* impl) const {
         impl->addCondition(Attr, Val);
@@ -179,14 +156,67 @@ struct TConditionOr {
     TCondition2 Rhs;
 };
 
+template <typename TCondition1, typename TCondition2>
+struct TConditionAnd {
+    void Apply(TSearchImpl* impl) const {
+        Lhs.Apply(impl);
+        impl->addLogicAnd();
+        Rhs.Apply(impl);
+    }
+
+    TConditionAnd(TCondition1 lhs, TCondition2 rhs)
+        : Lhs(lhs)
+        , Rhs(rhs)
+    {
+    }
+
+    TCondition1 Lhs;
+    TCondition2 Rhs;
+};
+
+template <typename TAttr>
+struct TCanFilter {
+    static TConditionEq Equal(const char* val) {
+        return {TAttr::Name, val};
+    }
+};
+
+template <typename TAttr>
+struct TCanRequest {
+    static void Request(TSearchImpl* impl) { impl->requestAttr(TAttr::Name); }
+};
+
+template <typename TAttr>
+struct TCanGroup {
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
+    }
+};
+
+template <typename TAttr, template <typename> class... TTraits>
+struct TAttrTraits : public TTraits<TAttr>... {
+    using Type = TAttr;
+};
+
+static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilter> ShopId;
+static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
+static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
+static TAttrTraits<TTitle, TCanRequest> Title;
+static TAttrTraits<TSalesFlag, TCanFilter> SalesFlag;
+
 template <typename TComparable>
 TConditionEq operator==(TComparable, const char* val) {
     /// ytodo check for compliance
-    return {TComparable::Type::Name, val};
+    return TComparable::Equal(val);
 }
 
 template <typename TCondition1, typename TCondition2>
 TConditionOr<TCondition1, TCondition2> operator||(TCondition1 lhs, TCondition2 rhs) {
+    return {lhs, rhs};
+}
+
+template <typename TCondition1, typename TCondition2>
+TConditionAnd<TCondition1, TCondition2> operator&&(TCondition1 lhs, TCondition2 rhs) {
     return {lhs, rhs};
 }
 
@@ -451,7 +481,7 @@ int main(int argc, const char * argv[])
         .Group()
             .By(MagicId, 10, 2)
             .By(OfferId, 3)
-        .Where(SalesFlag == "1" || SalesFlag == "2");
+        .Where((SalesFlag == "1" || SalesFlag == "2") && ShopId == "123");
 
     for (auto group : result.Group(MagicId)) {
         for (auto offer : group) {
