@@ -43,7 +43,10 @@
 
 struct TSearchImpl {
     void requestAttr(const char* attr) { std::cout << "Request attr: " << attr << std::endl; }
-    void requestGroup(const char* group, int cache) { std::cout << "Request group (" << cache << "): " << group << std::endl; }
+    void requestGroup(const char* group, size_t docsToFetch, size_t groupsToFetch) {
+        std::cout << "Group by " << group << ", fetch groups:" << groupsToFetch;
+        std::cout << ", docs:" << docsToFetch << std::endl;
+    }
 
     int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx) {
         if (!search_finished) {
@@ -97,36 +100,43 @@ struct TProperty {
 
 struct TOfferId : public virtual TProperty
 {
-    static void Request(TSearchImpl* impl) { impl->requestAttr("offer_id");}
-
-    /// have only attrs with support groupping
-    static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("offer_id", cache);}
-
     constexpr static const char* Name = "offer_id";
 
+    static void Request(TSearchImpl* impl) { impl->requestAttr(Name);}
+
+    /// have only attrs with support groupping
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(Name, docsToFetch, groupsToFetch);
+    }
+
     /// ytodo support index
-    int OfferId() { return read("offer_id"); }
+    int OfferId() { return read(Name); }
 };
 
 struct TShopId : public virtual TProperty {
-    static void Request(TSearchImpl* impl) { impl->requestAttr("shop_id"); }
-    int ShopId() { return read("shop_id"); }
     constexpr static const char* Name = "shop_id";
+
+    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
+    int ShopId() { return read(Name); }
 };
 
 struct TTitle : public virtual TProperty {
-    static void Request(TSearchImpl* impl) { impl->requestAttr("title"); }
-    int Title() { return read("title"); }
     constexpr static const char* Name = "title";
+
+    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
+    int Title() { return read(Name); }
 };
 
 struct TMagicId : public virtual TProperty {
-    static void Request(TSearchImpl* impl) { impl->requestAttr("magic_id"); }
-    static void Group(TSearchImpl* impl, int cache) { impl->requestGroup("magic_id", cache);}
     constexpr static const char* Name = "magic_id";
 
+    static void Request(TSearchImpl* impl) { impl->requestAttr(Name); }
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(Name, docsToFetch, groupsToFetch);
+    }
+
     /// todo separate to another class
-    int MagicId() { return read("magic_id"); }
+    int MagicId() { return read(Name); }
 };
 
 template <typename TAttr>
@@ -309,8 +319,8 @@ struct TGroupAttr : public TParent, public TAttr {
     TGroupAttr(TSearchImpl* impl) : TParent(impl) {}
 
     template <typename TGroup>
-    TGroupAttr<TThis, TGroup, TPrev> By(TGroup, int cache) {
-        TGroup::Type::Group(TGroupBase::Impl, cache);
+    TGroupAttr<TThis, TGroup, TPrev> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TGroup::Type::Group(TGroupBase::Impl, docsToFetch, groupsToFetch);
         return {TGroupBase::Impl};
     }
 
@@ -324,8 +334,8 @@ struct TGroupContext {
     TGroupContext(TSearchImpl* impl) : Impl(impl) {}
 
     template <typename TAttr>
-    TGroupAttr<TGroupBase, TAttr, TPrev> By(TAttr, int cache) {
-        TAttr::Type::Group(Impl, cache);
+    TGroupAttr<TGroupBase, TAttr, TPrev> By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TAttr::Type::Group(Impl, docsToFetch, groupsToFetch);
         return {Impl};
     }
 
@@ -396,8 +406,8 @@ int main(int argc, const char * argv[])
         .Select()
             .Offers(OfferId, ShopId, Title)
         .Group()
-            .By(MagicId, 1)
-            .By(OfferId, 2)
+            .By(MagicId, 10, 2)
+            .By(OfferId, 3)
         .End();
 
     for (auto group : result.Group(MagicId)) {
