@@ -1,6 +1,8 @@
 #include <iostream>
 #include <memory>
 #include <vector>
+#include <set>
+#include <string>
 
 /*
     ctx.Search().Offers(ShopId, CMagicId, OfferId).Group(ShopId, OfferId)
@@ -33,6 +35,7 @@
 
 */
 
+/// TQueryBackend
 struct TSearchImpl {
     void requestAttr(const char* attr) { std::cout << "Request attr: " << attr << std::endl; }
     void requestGroup(const char* group, size_t docsToFetch, size_t groupsToFetch) {
@@ -41,11 +44,6 @@ struct TSearchImpl {
     }
 
     int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx) {
-        if (!search_finished) {
-            search_finished = true;
-            search();
-        }
-
         std::cout << "Read property " << attr << " from doc(" << docIdx;
         std::cout << ") in " << group << "[" << groupIdx << "]" << std::endl;
         return 0;
@@ -55,12 +53,12 @@ struct TSearchImpl {
     size_t totalDocs(const char* groupName, size_t groupIdx) {
         (void)groupName;
         (void)groupIdx;
-        return 3;
+        return 2;
     }
 
     size_t totalGroups(const char* groupName) {
         (void)groupName;
-        return 4;
+        return 1;
     }
 
     void addCondition(const char* attr, const char* val) {
@@ -77,55 +75,18 @@ struct TSearchImpl {
 
 public:
     void search() { std::cout << "Perform search" << std::endl; }
-
-    bool search_finished = false;
 };
 
-/// ytodo check virtual inheritance and default ctor
-struct TProperty {
-    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
-        : Impl(impl)
-        , GroupName(group)
-        , GroupIdx(groupIdx)
-        , DocIdx(docIdx)
-    {}
+struct TConditionContains {
+    void Apply(TSearchImpl* ) const {}
+};
 
-    TProperty() = default;
-
-    TSearchImpl* Impl = nullptr;
-    const char* GroupName = nullptr;
-    size_t GroupIdx = 0;
-    size_t DocIdx = 0;
-
-
-    int read(const char* name) {
-        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx);
+struct TConditionMatch {
+    void Apply(TSearchImpl*) const {
+        //impl.sp.setgl(Filter);
     }
-};
 
-struct TOfferId : public virtual TProperty
-{
-    constexpr static const char* Name = "offer_id";
-    int OfferId() { return read(Name); }
-};
-
-struct TShopId : public virtual TProperty {
-    constexpr static const char* Name = "shop_id";
-    int ShopId() { return read(Name); }
-};
-
-struct TTitle : public virtual TProperty {
-    constexpr static const char* Name = "title";
-    int Title() { return read(Name); }
-};
-
-struct TSalesFlag {
-    constexpr static const char* Name = "sales";
-};
-
-struct TMagicId : public virtual TProperty {
-    constexpr static const char* Name = "magic_id";
-    int MagicId() { return read(Name); }
+    const char* Filter;
 };
 
 struct TConditionEq {
@@ -175,9 +136,26 @@ struct TConditionAnd {
 };
 
 template <typename TAttr>
-struct TCanFilter {
+struct TCanFilterValue {
     static TConditionEq Equal(const char* val) {
         return {TAttr::Name, val};
+    }
+};
+
+template <typename TAttr>
+struct TCanFilterList {
+    static TConditionContains Contains(const char* ) { return {};}
+};
+
+template <typename TAttr>
+struct TCanFilterSet {
+    static TConditionContains OneOf(std::set<std::string> ) { return {};}
+};
+
+template <typename TAttr>
+struct TCanFilterMatch {
+    static TConditionMatch Match(const char* filter) {
+        return {filter};
     }
 };
 
@@ -193,16 +171,87 @@ struct TCanGroup {
     }
 };
 
+/// compaund select, group and filter abilities of attribute
 template <typename TAttr, template <typename> class... TTraits>
 struct TAttrTraits : public TTraits<TAttr>... {
     using Type = TAttr;
 };
 
-static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilter> ShopId;
+/// ytodo check virtual inheritance and default ctor
+struct TProperty {
+    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
+        : Impl(impl)
+        , GroupName(group)
+        , GroupIdx(groupIdx)
+        , DocIdx(docIdx)
+    {}
+
+    TProperty() = default;
+
+    TSearchImpl* Impl = nullptr;
+    const char* GroupName = nullptr;
+    size_t GroupIdx = 0;
+    size_t DocIdx = 0;
+
+
+    int read(const char* name) const {
+        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx);
+    }
+};
+
+struct TOfferId {
+    constexpr static const char* Name = "offer_id";
+
+    struct TReader : private virtual TProperty {
+        int OfferId() const { return read(Name); }
+    };
+};
+
+/// todo get rid on methods
+struct TShopId {
+    constexpr static const char* Name = "shop_id";
+
+    struct TReader : private virtual TProperty {
+        int ShopId() const { return read(Name); }
+    };
+};
+
+struct TTitle {
+    constexpr static const char* Name = "title";
+
+    struct TReader : private virtual TProperty {
+        int Title() const { return read(Name); }
+    };
+};
+
+struct TSalesFlag {
+    constexpr static const char* Name = "sales";
+};
+
+struct TRegion {
+    constexpr static const char* Name = "region";
+};
+
+// relevance time check
+struct TGLParams {
+    constexpr static const char* Name = "glparams";
+};
+
+struct TMagicId {
+    constexpr static const char* Name = "magic_id";
+
+    struct TReader : private virtual TProperty {
+        int MagicId() const { return read(Name); }
+    };
+};
+
+static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilterValue> ShopId;
 static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
 static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
 static TAttrTraits<TTitle, TCanRequest> Title;
-static TAttrTraits<TSalesFlag, TCanFilter> SalesFlag;
+static TAttrTraits<TSalesFlag, TCanFilterValue> SalesFlag;
+static TAttrTraits<TRegion, TCanFilterSet, TCanFilterValue> Region;
+static TAttrTraits<TGLParams, TCanFilterMatch> GLParams;
 
 template <typename TComparable>
 TConditionEq operator==(TComparable, const char* val) {
@@ -420,8 +469,8 @@ struct TSelectTypes : public TArgs... {
 
 /// rename
 template <typename... TArgs>
-struct TSelectNames : public TArgs... {
-    using TThisTypes = TSelectTypes<typename TArgs::Type...>;
+struct TSelectNames {
+    using TThisTypes = TSelectTypes<typename TArgs::Type::TReader...>;
 
     TSelectNames(TSearchImpl* impl) : Impl(impl) {}
 
@@ -438,15 +487,15 @@ struct TSelectNames : public TArgs... {
 };
 
 struct TSelectContext {
-    /// make a request with attrs
+    /// make a request with attrs dependent
     template <typename... TArgs>
     TSelectNames<TArgs...> Offers(TArgs...) {
-        return TSelectNames<TArgs...>(&Impl); /// pass impl to ctor
+        return {&Impl}; /// pass impl to ctor
     }
 
     template <typename... TArgs>
     TSelectNames<TArgs...> Models(TArgs...) {
-        return TSelectNames<TArgs...>(&Impl); /// pass impl to ctor
+        return {&Impl}; /// pass impl to ctor
     }
 
     int Clusters;
@@ -463,7 +512,10 @@ struct TSearchSession {
         return {Impl};
     }
 
-    void ForceRun() {}
+    void FetchResult() {
+        Impl.search();
+    }
+
     TSearchImpl Impl;
 };
 
@@ -474,27 +526,45 @@ struct TSearchSession {
 
 int main(int argc, const char * argv[])
 {
+    const auto rids = std::set<std::string>{"213", "225"};
+    const char* glFilter = "1234:345";
     TSearchSession ctx;
-    auto result = ctx
+    auto offers = ctx
         .Select()
             .Offers(OfferId, ShopId, Title)
         .Group()
             .By(MagicId, 10, 2)
             .By(OfferId, 3)
-        .Where((SalesFlag == "1" || SalesFlag == "2") && ShopId == "123");
+        .Where(
+            (SalesFlag == "1" || SalesFlag == "2")
+            && ShopId == "123"
+            && (Region.OneOf(rids) || Region == "213")
+            && GLParams.Match(glFilter)
+        );
 
-    for (auto group : result.Group(MagicId)) {
+    auto models = ctx
+        .Select()
+            .Models(ShopId)
+        .Group()
+            .By(MagicId, 1, 1)
+        .Where(ShopId == "123");
+
+    ctx.FetchResult();
+
+    for (auto group : offers.Group(MagicId)) {
         for (auto offer : group) {
             offer.OfferId();
         }
     }
 
-    auto groups = result.Group(OfferId);
+    auto groups = offers.Group(OfferId);
     if (groups.Single()) {
         for (auto group : *groups.begin()) {
             (void) group;
         }
     }
+
+    models.Group(MagicId).begin()->begin()->ShopId();
 
     return 0;
 }
