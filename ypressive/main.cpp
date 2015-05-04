@@ -43,9 +43,9 @@ struct TSearchImpl {
         std::cout << ", docs:" << docsToFetch << std::endl;
     }
 
-    int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx) {
-        std::cout << "Read property " << attr << " from doc(" << docIdx;
-        std::cout << ") in " << group << "[" << groupIdx << "]" << std::endl;
+    int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx, const char* col) {
+        std::cout << "Read " << col << "::doc[" << docIdx << "]." << attr << " group=";
+        std::cout << group << "[" << groupIdx << "]" << std::endl;
         return 0;
     }
 
@@ -77,27 +77,155 @@ public:
     void search() { std::cout << "Perform search" << std::endl; }
 };
 
-struct TConditionContains {
-    void Apply(TSearchImpl* ) const {}
-};
-
-struct TConditionMatch {
-    void Apply(TSearchImpl*) const {
-        //impl.sp.setgl(Filter);
-    }
-
-    const char* Filter;
-};
-
+template <typename TValue>
 struct TConditionEq {
     void Apply(TSearchImpl* impl) const {
         impl->addCondition(Attr, Val);
     }
 
-    TConditionEq(const char* attr, const char* val) : Attr(attr), Val(val) {}
+    TConditionEq(const char* attr, const TValue& val) : Attr(attr), Val(val) {}
     const char* Attr = nullptr;
-    const char* Val = nullptr;
+    const TValue& Val;
 };
+
+template <typename TAttr>
+struct TCanFilter {
+    template <typename TValue>
+    static TConditionEq<TValue> Equal(const TValue& val) {
+        return {TAttr::Name, val};
+    }
+};
+
+template <typename TAttr>
+struct TCanRequest {
+    static void Request(TSearchImpl* impl) {
+        impl->requestAttr(TAttr::Name);
+    }
+};
+
+template <typename TAttr>
+struct TCanGroup {
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
+    }
+};
+
+/// compaund select, group and filter abilities of attribute
+/// ytodo dont inherit select and group traits, use using =
+template <typename TAttr, template <typename> class... TTraits>
+struct TAttrTraits : public TTraits<TAttr>... {
+    using Type = TAttr;
+};
+
+/// ytodo check virtual inheritance and default ctor
+struct TProperty {
+    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
+        : Impl(impl)
+        , GroupName(group)
+        , GroupIdx(groupIdx)
+        , DocIdx(docIdx)
+    {}
+
+    TProperty() = default;
+
+    TSearchImpl* Impl = nullptr;
+    const char* GroupName = nullptr;
+    size_t GroupIdx = 0;
+    size_t DocIdx = 0;
+
+    int read(const char* name, const char* collection) const {
+        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx, collection);
+    }
+};
+
+template <typename TCollection, typename TField>
+struct TCollectionBinding;
+
+/// custom schema
+
+/// collection definition
+struct TOffers {
+    static constexpr const char* Name = "SHOP";
+};
+
+struct TModels {
+    static constexpr const char* Name = "MODEL";
+};
+
+/// fields definition
+struct TOfferId {
+    constexpr static const char* Name = "offer_id";
+
+    template <typename TCollection>
+    struct TReader : private virtual TProperty {
+        int OfferId() const { return read(Name, TCollection::Name); }
+    };
+};
+
+struct TShopId {
+    constexpr static const char* Name = "shop_id";
+
+    template <typename TCollection>
+    struct TReader : private virtual TProperty {
+        int ShopId() const { return read(Name, TCollection::Name); }
+    };
+};
+
+struct TTitle {
+    constexpr static const char* Name = "title";
+
+    template <typename TCollection>
+    struct TReader : private virtual TProperty {
+        int Title() const { return read(Name, TCollection::Name); }
+    };
+};
+
+struct TSalesFlag {
+    constexpr static const char* Name = "sales";
+};
+
+struct TRegion {
+    constexpr static const char* Name = "region";
+};
+
+struct TGLParams {
+    constexpr static const char* Name = "glparams";
+};
+
+struct TMagicId {
+    constexpr static const char* Name = "magic_id";
+
+    template <typename TCollection>
+    struct TReader : private virtual TProperty {
+        int MagicId() const { return read(Name, TCollection::Name); }
+    };
+};
+
+/// fields to collection linkage
+template<> struct TCollectionBinding<TOffers, TOfferId> {};
+template<> struct TCollectionBinding<TOffers, TShopId> {};
+template<> struct TCollectionBinding<TOffers, TTitle> {};
+template<> struct TCollectionBinding<TOffers, TMagicId> {};
+template<> struct TCollectionBinding<TOffers, TSalesFlag> {};
+template<> struct TCollectionBinding<TOffers, TRegion> {};
+template<> struct TCollectionBinding<TOffers, TGLParams> {};
+
+template<> struct TCollectionBinding<TModels, TShopId> {};
+template<> struct TCollectionBinding<TModels, TMagicId> {};
+
+/// constants
+static TOffers Offers;
+static TModels Models;
+
+static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilter> ShopId;
+static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
+static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
+static TAttrTraits<TTitle, TCanRequest> Title;
+static TAttrTraits<TSalesFlag, TCanFilter> SalesFlag;
+static TAttrTraits<TRegion, TCanFilter> Region;
+static TAttrTraits<TGLParams, TCanFilter> GLParams;
+
+/// end of custom schema
 
 template <typename TCondition1, typename TCondition2>
 struct TConditionOr {
@@ -135,128 +263,10 @@ struct TConditionAnd {
     TCondition2 Rhs;
 };
 
-template <typename TAttr>
-struct TCanFilterValue {
-    static TConditionEq Equal(const char* val) {
-        return {TAttr::Name, val};
-    }
-};
-
-template <typename TAttr>
-struct TCanFilterList {
-    static TConditionContains Contains(const char* ) { return {};}
-};
-
-template <typename TAttr>
-struct TCanFilterSet {
-    static TConditionContains OneOf(std::set<std::string> ) { return {};}
-};
-
-template <typename TAttr>
-struct TCanFilterMatch {
-    static TConditionMatch Match(const char* filter) {
-        return {filter};
-    }
-};
-
-template <typename TAttr>
-struct TCanRequest {
-    static void Request(TSearchImpl* impl) { impl->requestAttr(TAttr::Name); }
-};
-
-template <typename TAttr>
-struct TCanGroup {
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
-    }
-};
-
-/// compaund select, group and filter abilities of attribute
-template <typename TAttr, template <typename> class... TTraits>
-struct TAttrTraits : public TTraits<TAttr>... {
-    using Type = TAttr;
-};
-
-/// ytodo check virtual inheritance and default ctor
-struct TProperty {
-    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
-        : Impl(impl)
-        , GroupName(group)
-        , GroupIdx(groupIdx)
-        , DocIdx(docIdx)
-    {}
-
-    TProperty() = default;
-
-    TSearchImpl* Impl = nullptr;
-    const char* GroupName = nullptr;
-    size_t GroupIdx = 0;
-    size_t DocIdx = 0;
-
-
-    int read(const char* name) const {
-        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx);
-    }
-};
-
-struct TOfferId {
-    constexpr static const char* Name = "offer_id";
-
-    struct TReader : private virtual TProperty {
-        int OfferId() const { return read(Name); }
-    };
-};
-
-/// todo get rid on methods
-struct TShopId {
-    constexpr static const char* Name = "shop_id";
-
-    struct TReader : private virtual TProperty {
-        int ShopId() const { return read(Name); }
-    };
-};
-
-struct TTitle {
-    constexpr static const char* Name = "title";
-
-    struct TReader : private virtual TProperty {
-        int Title() const { return read(Name); }
-    };
-};
-
-struct TSalesFlag {
-    constexpr static const char* Name = "sales";
-};
-
-struct TRegion {
-    constexpr static const char* Name = "region";
-};
-
-// relevance time check
-struct TGLParams {
-    constexpr static const char* Name = "glparams";
-};
-
-struct TMagicId {
-    constexpr static const char* Name = "magic_id";
-
-    struct TReader : private virtual TProperty {
-        int MagicId() const { return read(Name); }
-    };
-};
-
-static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilterValue> ShopId;
-static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
-static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
-static TAttrTraits<TTitle, TCanRequest> Title;
-static TAttrTraits<TSalesFlag, TCanFilterValue> SalesFlag;
-static TAttrTraits<TRegion, TCanFilterSet, TCanFilterValue> Region;
-static TAttrTraits<TGLParams, TCanFilterMatch> GLParams;
-
-template <typename TComparable>
-TConditionEq operator==(TComparable, const char* val) {
-    /// ytodo check for compliance
-    return TComparable::Equal(val);
+/// sugar
+template <typename TComparable, typename TValue>
+auto operator==(TComparable, const TValue& value) -> decltype(TComparable::Equal(value)){
+    return TComparable::Equal(value);
 }
 
 template <typename TCondition1, typename TCondition2>
@@ -431,14 +441,15 @@ struct TSearchResult {
     TSearchImpl* Impl;
 };
 
-template <typename TParent, typename TAttr, typename TRequestAttrs>
+template <typename TParent, typename TAttr, typename TCollection, typename TRequestAttrs>
 struct TGroupAttr : public TParent, public TAttr {
-    using TThis = TGroupAttr<TParent, TAttr, TRequestAttrs>;
+    using TThis = TGroupAttr<TParent, TAttr, TCollection, TRequestAttrs>;
 
     TGroupAttr(TSearchImpl* impl) : TParent(impl) {}
 
     template <typename TGroup>
-    TGroupAttr<TThis, TGroup, TRequestAttrs> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
+    TGroupAttr<TThis, TGroup, TCollection, TRequestAttrs> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TCollectionBinding<TCollection, typename TAttr::Type>();
         TGroup::Group(TSearchServiceBase::Impl, docsToFetch, groupsToFetch);
         return {TSearchServiceBase::Impl};
     }
@@ -450,12 +461,14 @@ struct TGroupAttr : public TParent, public TAttr {
     }
 };
 
-template <typename TRequestAttrs>
+template <typename TCollection, typename TRequestAttrs>
 struct TGroupContext {
     TGroupContext(TSearchImpl* impl) : Impl(impl) {}
 
     template <typename TAttr>
-    TGroupAttr<TSearchServiceBase, TAttr, TRequestAttrs> By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
+    TGroupAttr<TSearchServiceBase, TAttr, TCollection, TRequestAttrs>
+    By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
+        TCollectionBinding<TCollection, typename TAttr::Type>();
         TAttr::Group(Impl, docsToFetch, groupsToFetch);
         return {Impl};
     }
@@ -468,37 +481,32 @@ struct TSelectTypes : public TArgs... {
 };
 
 /// rename
-template <typename... TArgs>
+template <typename TCollection, typename... TArgs>
 struct TSelectNames {
-    using TThisTypes = TSelectTypes<typename TArgs::Type::TReader...>;
+    using TThisTypes = TSelectTypes<typename TArgs::Type::template TReader<TCollection>...>;
+    //using TThisTypes = TSelectTypes<typename TArgs::Type::TReader...>;
 
-    TSelectNames(TSearchImpl* impl) : Impl(impl) {}
-
-    static void Apply(TSearchImpl* impl) {
-        [=](...){ }((TArgs::Request(impl), 0)...);  /// make nonstatic: how to invoke base method with dup name?
+    TSelectNames(TSearchImpl* impl) : Impl(impl) {
+        [](...){}((TCollectionBinding<TCollection, typename TArgs::Type>())...);
     }
 
-    TGroupContext<TThisTypes> Group() {
-        Apply(Impl);
+    TGroupContext<TCollection, TThisTypes> Group() {
+        [](...){}((TArgs::Request(Impl), 0)...);
         return {Impl};
     }
 
     TSearchImpl* Impl;
 };
 
+template <typename TCollection>
 struct TSelectContext {
     /// make a request with attrs dependent
-    template <typename... TArgs>
-    TSelectNames<TArgs...> Offers(TArgs...) {
-        return {&Impl}; /// pass impl to ctor
-    }
 
     template <typename... TArgs>
-    TSelectNames<TArgs...> Models(TArgs...) {
+    TSelectNames<TCollection, TArgs...> Fields(TArgs...) {
+        /// check args from collection
         return {&Impl}; /// pass impl to ctor
     }
-
-    int Clusters;
 
 public:
     TSelectContext(TSearchImpl& impl) : Impl(impl) {}
@@ -508,11 +516,12 @@ private:
 };
 
 struct TSearchSession {
-    TSelectContext Select() {
+    template <typename TCollection>
+    TSelectContext<TCollection> Select(TCollection) {
         return {Impl};
     }
 
-    void FetchResult() {
+    void Fetch() {
         Impl.search();
     }
 
@@ -530,26 +539,26 @@ int main(int argc, const char * argv[])
     const char* glFilter = "1234:345";
     TSearchSession ctx;
     auto offers = ctx
-        .Select()
-            .Offers(OfferId, ShopId, Title)
+        .Select(Offers)
+            .Fields(OfferId, ShopId, Title)
         .Group()
             .By(MagicId, 10, 2)
             .By(OfferId, 3)
         .Where(
             (SalesFlag == "1" || SalesFlag == "2")
             && ShopId == "123"
-            && (Region.OneOf(rids) || Region == "213")
-            && GLParams.Match(glFilter)
+            && Region == "213"
+            && GLParams == glFilter
         );
 
     auto models = ctx
-        .Select()
-            .Models(ShopId)
+        .Select(Models)
+            .Fields(ShopId)
         .Group()
             .By(MagicId, 1, 1)
-        .Where(ShopId == "123");
+        .Where(Region == "123");
 
-    ctx.FetchResult();
+    ctx.Fetch();
 
     for (auto group : offers.Group(MagicId)) {
         for (auto offer : group) {
@@ -564,8 +573,7 @@ int main(int argc, const char * argv[])
         }
     }
 
-    models.Group(MagicId).begin()->begin()->ShopId();
+    //models.Group(MagicId).begin()->begin()->ShopId();
 
     return 0;
 }
-
