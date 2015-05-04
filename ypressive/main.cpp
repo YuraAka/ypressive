@@ -61,53 +61,20 @@ struct TSearchImpl {
         return 1;
     }
 
-    void addCondition(const char* attr, const char* val) {
-        std::cout << "Filter " << attr << " = " << val << std::endl;
+    void addCondition(const char* attr, const char* val, const char* col) {
+        std::cout << "Filter " << attr << ":" << col << " = " << val << std::endl;
     }
 
-    void addLogicOr() {
-        std::cout << "OR" << std::endl;
+    void addLogicOr(const char* col) {
+        std::cout << col << ":OR" << std::endl;
     }
 
-    void addLogicAnd() {
-        std::cout << "AND" << std::endl;
+    void addLogicAnd(const char* col) {
+        std::cout << col << ":AND" << std::endl;
     }
 
 public:
     void search() { std::cout << "Perform search" << std::endl; }
-};
-
-template <typename TValue>
-struct TConditionEq {
-    void Apply(TSearchImpl* impl) const {
-        impl->addCondition(Attr, Val);
-    }
-
-    TConditionEq(const char* attr, const TValue& val) : Attr(attr), Val(val) {}
-    const char* Attr = nullptr;
-    const TValue& Val;
-};
-
-template <typename TAttr>
-struct TCanFilter {
-    template <typename TValue>
-    static TConditionEq<TValue> Equal(const TValue& val) {
-        return {TAttr::Name, val};
-    }
-};
-
-template <typename TAttr>
-struct TCanRequest {
-    static void Request(TSearchImpl* impl) {
-        impl->requestAttr(TAttr::Name);
-    }
-};
-
-template <typename TAttr>
-struct TCanGroup {
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
-    }
 };
 
 /// compaund select, group and filter abilities of attribute
@@ -137,9 +104,6 @@ struct TProperty {
         return Impl->readProperty(GroupName, GroupIdx, name, DocIdx, collection);
     }
 };
-
-template <typename TCollection, typename TField>
-struct TCollectionBinding;
 
 /// custom schema
 
@@ -201,6 +165,45 @@ struct TMagicId {
     };
 };
 
+/// helper structs
+template <typename TCollection, typename TField>
+struct TCollectionBinding;
+
+template <typename TValue, typename TAttr>
+struct TConditionEq {
+    template <typename TCollection>
+    void Apply(TSearchImpl* impl) const {
+        TCollectionBinding<TCollection, TAttr>();
+        impl->addCondition(TAttr::Name, Val, TCollection::Name);
+    }
+
+    TConditionEq(const TValue& val) : Val(val) {}
+    const TValue& Val;
+};
+
+/// filter may have different impls, depending on attr: sp, text filter ...
+template <typename TAttr>
+struct TCanFilter {
+    template <typename TValue>
+    static TConditionEq<TValue, TAttr> Equal(const TValue& val) {
+        return {val};
+    }
+};
+
+template <typename TAttr>
+struct TCanRequest {
+    static void Request(TSearchImpl* impl) {
+        impl->requestAttr(TAttr::Name);
+    }
+};
+
+template <typename TAttr>
+struct TCanGroup {
+    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
+        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
+    }
+};
+
 /// fields to collection linkage
 template<> struct TCollectionBinding<TOffers, TOfferId> {};
 template<> struct TCollectionBinding<TOffers, TShopId> {};
@@ -229,10 +232,11 @@ static TAttrTraits<TGLParams, TCanFilter> GLParams;
 
 template <typename TCondition1, typename TCondition2>
 struct TConditionOr {
+    template <typename TCollection>
     void Apply(TSearchImpl* impl) const {
-        Lhs.Apply(impl);
-        impl->addLogicOr();
-        Rhs.Apply(impl);
+        Lhs.template Apply<TCollection>(impl);
+        impl->addLogicOr(TCollection::Name);
+        Rhs.template Apply<TCollection>(impl);
     }
 
     TConditionOr(TCondition1 lhs, TCondition2 rhs)
@@ -247,10 +251,11 @@ struct TConditionOr {
 
 template <typename TCondition1, typename TCondition2>
 struct TConditionAnd {
+    template <typename TCollection>
     void Apply(TSearchImpl* impl) const {
-        Lhs.Apply(impl);
-        impl->addLogicAnd();
-        Rhs.Apply(impl);
+        Lhs.template Apply<TCollection>(impl);
+        impl->addLogicAnd(TCollection::Name);
+        Rhs.template Apply<TCollection>(impl);
     }
 
     TConditionAnd(TCondition1 lhs, TCondition2 rhs)
@@ -441,6 +446,7 @@ struct TSearchResult {
     TSearchImpl* Impl;
 };
 
+/// rename Attr -> Field
 template <typename TParent, typename TAttr, typename TCollection, typename TRequestAttrs>
 struct TGroupAttr : public TParent, public TAttr {
     using TThis = TGroupAttr<TParent, TAttr, TCollection, TRequestAttrs>;
@@ -456,7 +462,7 @@ struct TGroupAttr : public TParent, public TAttr {
 
     template <typename TCondition>
     TSearchResult<TRequestAttrs, TThis> Where(TCondition cond) {
-        cond.Apply(TSearchServiceBase::Impl);
+        cond.template Apply<TCollection>(TSearchServiceBase::Impl);
         return {TSearchServiceBase::Impl};
     }
 };
@@ -556,7 +562,7 @@ int main(int argc, const char * argv[])
             .Fields(ShopId)
         .Group()
             .By(MagicId, 1, 1)
-        .Where(Region == "123");
+        .Where(ShopId == "123");
 
     ctx.Fetch();
 
@@ -573,7 +579,7 @@ int main(int argc, const char * argv[])
         }
     }
 
-    //models.Group(MagicId).begin()->begin()->ShopId();
+    models.Group(MagicId).begin()->begin()->ShopId();
 
     return 0;
 }
