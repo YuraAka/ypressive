@@ -4,49 +4,17 @@
 #include <set>
 #include <string>
 
-/*
-    ctx.Search().Offers(ShopId, CMagicId, OfferId).Group(ShopId, OfferId)
-        .Where(Text.Contains("hello") && OfferId.OneOf(1,2,3));
-        
-    ctx.Search().Clusters(Id, Title).Group(Id)
-        .Where(
-            Text.Contains(cgi.Text) 
-            && Params.Match(cgi.GLFilters)
-            && Region.OneOf(cgi.Rids)
-            && Category.OneOf(cgi.hid)
-        );
-        
-    ctx.Search().Models(Id, Title, Picture).Group(Id)
-    
-    result = ctx.Execute();
-    
-    /// if not searched, do not show
-    range = result.Give().Clusters.GroupedBy.Id
-    for (const auto& cluster : range) {
-        cluster.Id
-        cluster.Title
-        /// no more then ask
-    }
-    
-    /// by text
-    /// by category
-    /// by region
-    /// by glfilters
-
-*/
-
-/// TQueryBackend
-struct TSearchImpl {
+struct TQueryBackend {
     void requestAttr(const char* attr) { std::cout << "Request attr: " << attr << std::endl; }
     void requestGroup(const char* group, size_t docsToFetch, size_t groupsToFetch) {
         std::cout << "Group by " << group << ", fetch groups:" << groupsToFetch;
         std::cout << ", docs:" << docsToFetch << std::endl;
     }
 
-    int readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx, const char* col) {
+    const char* readProperty(const char* group, size_t groupIdx, const char* attr, size_t docIdx, const char* col) {
         std::cout << "Read " << col << "::doc[" << docIdx << "]." << attr << " group=";
         std::cout << group << "[" << groupIdx << "]" << std::endl;
-        return 0;
+        return "0";
     }
 
     // ytodo default behaviour -- return only prefetched
@@ -77,17 +45,9 @@ public:
     void search() { std::cout << "Perform search" << std::endl; }
 };
 
-/// compaund select, group and filter abilities of attribute
-/// ytodo dont inherit select and group traits, use using =
-template <typename TAttr, template <typename> class... TTraits>
-struct TAttrTraits : public TTraits<TAttr>... {
-    using Type = TAttr;
-};
-
-/// ytodo check virtual inheritance and default ctor
 struct TProperty {
-    TProperty(TSearchImpl* impl, const char* group, size_t groupIdx, size_t docIdx)
-        : Impl(impl)
+    TProperty(TQueryBackend* backend, const char* group, size_t groupIdx, size_t docIdx)
+        : Backend(backend)
         , GroupName(group)
         , GroupIdx(groupIdx)
         , DocIdx(docIdx)
@@ -95,148 +55,113 @@ struct TProperty {
 
     TProperty() = default;
 
-    TSearchImpl* Impl = nullptr;
+    TQueryBackend* Backend = nullptr;
     const char* GroupName = nullptr;
     size_t GroupIdx = 0;
     size_t DocIdx = 0;
 
-    int read(const char* name, const char* collection) const {
-        return Impl->readProperty(GroupName, GroupIdx, name, DocIdx, collection);
+    const char* read(const char* name, const char* collection) const {
+        return Backend->readProperty(GroupName, GroupIdx, name, DocIdx, collection);
     }
 };
 
-/// custom schema
+#define DECLARE_FIELD(NAME) static struct T ## NAME {} NAME;
 
-/// collection definition
-struct TOffers {
-    static constexpr const char* Name = "SHOP";
-};
+#define COLLECTION_BEGIN(NAME, TEXT)                                                    \
+namespace N ## NAME ## Detail {                                                         \
+    struct T ## NAME {                                                                  \
+        static constexpr const char* Name = TEXT;                                       \
+                                                                                        \
+        template <typename TField>                                                      \
+        struct TLink;                                                                   \
+    };                                                                                  \
+}                                                                                       \
+static N ## NAME ## Detail::T ## NAME NAME;                                             \
+namespace N ## NAME ## Detail {                                                         \
+    using TCol = T ## NAME;
 
-struct TModels {
-    static constexpr const char* Name = "MODEL";
-};
+#define COLLECTION_END() }
 
-/// fields definition
-struct TOfferId {
-    constexpr static const char* Name = "offer_id";
+#define FIELD_BEGIN(NAME)                                                               \
+template<>                                                                              \
+struct TCol::TLink<T ## NAME> {
 
-    template <typename TCollection>
-    struct TReader : private virtual TProperty {
-        int OfferId() const { return read(Name, TCollection::Name); }
-    };
-};
+#define FIELD_END() };
+#define FIELD_NAME(NAME) static constexpr const char* Name = NAME;
+#define FIELD_READER(NAME)                                                              \
+struct TReader : private virtual TProperty {                                            \
+    const char* NAME () const { return read(Name, TCol::Name); }                        \
+};                                                                                  
 
-struct TShopId {
-    constexpr static const char* Name = "shop_id";
+#define FIELD_REQUEST() \
+static void Request(TQueryBackend* backend) {                                           \
+    backend->requestAttr(Name);                                                         \
+}                                                                                       \
 
-    template <typename TCollection>
-    struct TReader : private virtual TProperty {
-        int ShopId() const { return read(Name, TCollection::Name); }
-    };
-};
+#define FIELD_GROUP() \
+static void Group(TQueryBackend* backend, size_t docsToFetch, size_t groupsToFetch) {   \
+    backend->requestGroup(Name, docsToFetch, groupsToFetch);                            \
+}                                                                                   
 
-struct TTitle {
-    constexpr static const char* Name = "title";
+#define FIELD_FILTER() \
+static void Filter(TQueryBackend* backend, const char* value) {                         \
+    backend->addCondition(Name, value, TCol::Name);                                     \
+}
 
-    template <typename TCollection>
-    struct TReader : private virtual TProperty {
-        int Title() const { return read(Name, TCollection::Name); }
-    };
-};
+#define GROUPPING_ATTR(NAME, TEXT)                                                      \
+    FIELD_BEGIN(NAME)                                                                   \
+        FIELD_NAME(TEXT)                                                                \
+        FIELD_READER(NAME)                                                              \
+        FIELD_REQUEST()                                                                 \
+        FIELD_GROUP()                                                                   \
+        FIELD_FILTER()                                                                  \
+    FIELD_END()
 
-struct TSalesFlag {
-    constexpr static const char* Name = "sales";
-};
+#define SEARCH_LITERAL(NAME, TEXT)                                                      \
+    FIELD_BEGIN(NAME)                                                                   \
+        FIELD_NAME(TEXT)                                                                \
+        FIELD_READER(NAME)                                                              \
+        FIELD_REQUEST()                                                                 \
+        FIELD_FILTER()                                                                  \
+    FIELD_END()
 
-struct TRegion {
-    constexpr static const char* Name = "region";
-};
+#define PLAIN_PROPERTY(NAME, TEXT)                                                      \
+    FIELD_BEGIN(NAME)                                                                   \
+        FIELD_NAME(TEXT)                                                                \
+        FIELD_READER(NAME)                                                              \
+        FIELD_REQUEST()                                                                 \
+    FIELD_END()
 
-struct TGLParams {
-    constexpr static const char* Name = "glparams";
-};
+DECLARE_FIELD(OfferId)
+DECLARE_FIELD(ShopId)
+DECLARE_FIELD(Title)
+DECLARE_FIELD(SalesFlag)
+DECLARE_FIELD(Region)
+DECLARE_FIELD(MagicId)
 
-struct TMagicId {
-    constexpr static const char* Name = "magic_id";
+COLLECTION_BEGIN(Offers, "SHOP")
+    GROUPPING_ATTR(OfferId, "offer_id")
+    PLAIN_PROPERTY(Title, "title")
+    SEARCH_LITERAL(SalesFlag, "sales")
+    SEARCH_LITERAL(ShopId, "shop_id")
+    SEARCH_LITERAL(Region, "region")
+    GROUPPING_ATTR(MagicId, "magic_id")
+COLLECTION_END()
 
-    template <typename TCollection>
-    struct TReader : private virtual TProperty {
-        int MagicId() const { return read(Name, TCollection::Name); }
-    };
-};
-
-/// helper structs
-template <typename TCollection, typename TField>
-struct TCollectionBinding;
-
-template <typename TValue, typename TAttr>
-struct TConditionEq {
-    template <typename TCollection>
-    void Apply(TSearchImpl* impl) const {
-        TCollectionBinding<TCollection, TAttr>();
-        impl->addCondition(TAttr::Name, Val, TCollection::Name);
-    }
-
-    TConditionEq(const TValue& val) : Val(val) {}
-    const TValue& Val;
-};
-
-/// filter may have different impls, depending on attr: sp, text filter ...
-template <typename TAttr>
-struct TCanFilter {
-    template <typename TValue>
-    static TConditionEq<TValue, TAttr> Equal(const TValue& val) {
-        return {val};
-    }
-};
-
-template <typename TAttr>
-struct TCanRequest {
-    static void Request(TSearchImpl* impl) {
-        impl->requestAttr(TAttr::Name);
-    }
-};
-
-template <typename TAttr>
-struct TCanGroup {
-    static void Group(TSearchImpl* impl, size_t docsToFetch, size_t groupsToFetch) {
-        impl->requestGroup(TAttr::Name, docsToFetch, groupsToFetch);
-    }
-};
-
-/// fields to collection linkage
-template<> struct TCollectionBinding<TOffers, TOfferId> {};
-template<> struct TCollectionBinding<TOffers, TShopId> {};
-template<> struct TCollectionBinding<TOffers, TTitle> {};
-template<> struct TCollectionBinding<TOffers, TMagicId> {};
-template<> struct TCollectionBinding<TOffers, TSalesFlag> {};
-template<> struct TCollectionBinding<TOffers, TRegion> {};
-template<> struct TCollectionBinding<TOffers, TGLParams> {};
-
-template<> struct TCollectionBinding<TModels, TShopId> {};
-template<> struct TCollectionBinding<TModels, TMagicId> {};
-
-/// constants
-static TOffers Offers;
-static TModels Models;
-
-static TAttrTraits<TShopId, TCanRequest, TCanGroup, TCanFilter> ShopId;
-static TAttrTraits<TOfferId, TCanRequest, TCanGroup> OfferId;
-static TAttrTraits<TMagicId, TCanRequest, TCanGroup> MagicId;
-static TAttrTraits<TTitle, TCanRequest> Title;
-static TAttrTraits<TSalesFlag, TCanFilter> SalesFlag;
-static TAttrTraits<TRegion, TCanFilter> Region;
-static TAttrTraits<TGLParams, TCanFilter> GLParams;
+COLLECTION_BEGIN(Models, "MODEL")
+    SEARCH_LITERAL(ShopId, "shop_id")
+    GROUPPING_ATTR(MagicId, "magic_id")
+COLLECTION_END()
 
 /// end of custom schema
 
 template <typename TCondition1, typename TCondition2>
 struct TConditionOr {
     template <typename TCollection>
-    void Apply(TSearchImpl* impl) const {
-        Lhs.template Apply<TCollection>(impl);
-        impl->addLogicOr(TCollection::Name);
-        Rhs.template Apply<TCollection>(impl);
+    void Apply(TQueryBackend* backend) const {
+        Lhs.template Apply<TCollection>(backend);
+        backend->addLogicOr(TCollection::Name);
+        Rhs.template Apply<TCollection>(backend);
     }
 
     TConditionOr(TCondition1 lhs, TCondition2 rhs)
@@ -252,10 +177,10 @@ struct TConditionOr {
 template <typename TCondition1, typename TCondition2>
 struct TConditionAnd {
     template <typename TCollection>
-    void Apply(TSearchImpl* impl) const {
-        Lhs.template Apply<TCollection>(impl);
-        impl->addLogicAnd(TCollection::Name);
-        Rhs.template Apply<TCollection>(impl);
+    void Apply(TQueryBackend* backend) const {
+        Lhs.template Apply<TCollection>(backend);
+        backend->addLogicAnd(TCollection::Name);
+        Rhs.template Apply<TCollection>(backend);
     }
 
     TConditionAnd(TCondition1 lhs, TCondition2 rhs)
@@ -268,10 +193,23 @@ struct TConditionAnd {
     TCondition2 Rhs;
 };
 
-/// sugar
-template <typename TComparable, typename TValue>
-auto operator==(TComparable, const TValue& value) -> decltype(TComparable::Equal(value)){
-    return TComparable::Equal(value);
+template <typename TField, typename TValue>
+struct TConditionField {
+    using TKey = TField;
+
+    TConditionField(const TValue& value) : Value(value) {}
+
+    template <typename TCollection>
+    void Apply(TQueryBackend* backend) const {
+        TCollection::template TLink<TField>::Filter(backend, Value);
+    }
+
+    const TValue& Value;
+};
+
+template <typename TField, typename TValue>
+TConditionField<TField, TValue> operator==(TField, const TValue& value) {
+    return {value};
 }
 
 template <typename TCondition1, typename TCondition2>
@@ -285,14 +223,14 @@ TConditionAnd<TCondition1, TCondition2> operator&&(TCondition1 lhs, TCondition2 
 }
 
 struct TSearchServiceBase {
-    TSearchServiceBase(TSearchImpl* impl) : Impl(impl) {}
-    TSearchImpl* Impl;
+    TSearchServiceBase(TQueryBackend* backend) : Impl(backend) {}
+    TQueryBackend* Impl;
 };
 
 template <typename TRequestAttrs>
 struct TDocAccessor : public TRequestAttrs {
-    TDocAccessor(TSearchImpl* impl, const char* name, size_t groupIdx, size_t docIdx)
-        : TProperty(impl, name, groupIdx, docIdx) {}
+    TDocAccessor(TQueryBackend* backend, const char* name, size_t groupIdx, size_t docIdx)
+        : TProperty(backend, name, groupIdx, docIdx) {}
 };
 
 template <typename TRequestAttrs>
@@ -300,9 +238,9 @@ struct TDocIterator {
     using TElement = TDocAccessor<TRequestAttrs>;
     using TThis = TDocIterator<TRequestAttrs>;
 
-    TDocIterator(TSearchImpl* impl, const char* groupName, size_t groupIdx, size_t start)
-        : Impl(impl)
-        , Current(impl, groupName, groupIdx, start)
+    TDocIterator(TQueryBackend* backend, const char* groupName, size_t groupIdx, size_t start)
+        : Impl(backend)
+        , Current(backend, groupName, groupIdx, start)
         , Counter(start)
         , GroupName(groupName)
         , GroupIdx(groupIdx)
@@ -331,7 +269,7 @@ struct TDocIterator {
     }
 
     /// use optional
-    TSearchImpl* Impl;
+    TQueryBackend* Impl;
     TElement Current;
     size_t Counter = 0;
     const char* GroupName = nullptr;
@@ -342,9 +280,9 @@ template <typename TRequestAttrs>
 struct TDocRange {
     using TIterator = TDocIterator<TRequestAttrs>;
 
-    TDocRange(TSearchImpl* impl, const char* groupName, size_t groupIdx)
-        : Begin(impl, groupName, groupIdx, 0)
-        , End(impl, groupName, groupIdx, impl->totalDocs(groupName, groupIdx))
+    TDocRange(TQueryBackend* backend, const char* groupName, size_t groupIdx)
+        : Begin(backend, groupName, groupIdx, 0)
+        , End(backend, groupName, groupIdx, backend->totalDocs(groupName, groupIdx))
     {
     }
 
@@ -365,9 +303,9 @@ struct TDocRangeIterator {
     using TElement = TDocRange<TRequestAttrs>;
     using TThis = TDocRangeIterator<TRequestAttrs>;
 
-    TDocRangeIterator(TSearchImpl* impl, const char* groupName, size_t start)
-        : Impl(impl)
-        , Current(impl, groupName, start)
+    TDocRangeIterator(TQueryBackend* backend, const char* groupName, size_t start)
+        : Impl(backend)
+        , Current(backend, groupName, start)
         , Counter(start)
         , GroupName(groupName)
     {
@@ -394,7 +332,7 @@ struct TDocRangeIterator {
         return Counter == other.Counter;
     }
 
-    TSearchImpl* Impl;
+    TQueryBackend* Impl;
     TElement Current;
     size_t Counter = 0;
     const char* GroupName = nullptr;
@@ -404,10 +342,10 @@ template <typename TRequestAttrs>
 struct TGroupRange {
     using TIterator = TDocRangeIterator<TRequestAttrs>;
 
-    TGroupRange(TSearchImpl* impl, const char* groupName)
-        : GroupsCount(impl->totalGroups(groupName))
-        , Begin(impl, groupName, 0)
-        , End(impl, groupName, GroupsCount)
+    TGroupRange(TQueryBackend* backend, const char* groupName)
+        : GroupsCount(backend->totalGroups(groupName))
+        , Begin(backend, groupName, 0)
+        , End(backend, groupName, GroupsCount)
     {
     }
 
@@ -428,22 +366,22 @@ struct TGroupRange {
     TIterator End;
 };
 
-template <typename TRequestAttrs, typename TGroupAttrs>
+template <typename TRequestAttrs, typename TGroupAttrs, typename TCollection>
 struct TSearchResult {
-    TSearchResult(TSearchImpl* impl) : Impl(impl) {
+    TSearchResult(TQueryBackend* backend) : Impl(backend) {
     }
 
-    /// why do we need TDocAccessor?
     template <typename TGroup>
     TGroupRange<TRequestAttrs> Group(TGroup) {
         /// is parent of trait
+        /// check group match requested
         TGroupAttrs* fake;
         (void)static_cast<TGroup*>(fake);
 
-        return TGroupRange<TRequestAttrs>(Impl, TGroup::Type::Name);
+        return TGroupRange<TRequestAttrs>(Impl, TCollection::template TLink<TGroup>::Name);
     }
 
-    TSearchImpl* Impl;
+    TQueryBackend* Impl;
 };
 
 /// rename Attr -> Field
@@ -451,17 +389,16 @@ template <typename TParent, typename TAttr, typename TCollection, typename TRequ
 struct TGroupAttr : public TParent, public TAttr {
     using TThis = TGroupAttr<TParent, TAttr, TCollection, TRequestAttrs>;
 
-    TGroupAttr(TSearchImpl* impl) : TParent(impl) {}
+    TGroupAttr(TQueryBackend* backend) : TParent(backend) {}
 
     template <typename TGroup>
     TGroupAttr<TThis, TGroup, TCollection, TRequestAttrs> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TCollectionBinding<TCollection, typename TAttr::Type>();
-        TGroup::Group(TSearchServiceBase::Impl, docsToFetch, groupsToFetch);
+        TCollection::template TLink<TGroup>::Group(TSearchServiceBase::Impl, docsToFetch, groupsToFetch);
         return {TSearchServiceBase::Impl};
     }
 
     template <typename TCondition>
-    TSearchResult<TRequestAttrs, TThis> Where(TCondition cond) {
+    TSearchResult<TRequestAttrs, TThis, TCollection> Where(TCondition cond) {
         cond.template Apply<TCollection>(TSearchServiceBase::Impl);
         return {TSearchServiceBase::Impl};
     }
@@ -469,17 +406,16 @@ struct TGroupAttr : public TParent, public TAttr {
 
 template <typename TCollection, typename TRequestAttrs>
 struct TGroupContext {
-    TGroupContext(TSearchImpl* impl) : Impl(impl) {}
+    TGroupContext(TQueryBackend* backend) : Impl(backend) {}
 
     template <typename TAttr>
     TGroupAttr<TSearchServiceBase, TAttr, TCollection, TRequestAttrs>
     By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TCollectionBinding<TCollection, typename TAttr::Type>();
-        TAttr::Group(Impl, docsToFetch, groupsToFetch);
+        TCollection::template TLink<TAttr>::Group(Impl, docsToFetch, groupsToFetch);
         return {Impl};
     }
 
-    TSearchImpl* Impl;
+    TQueryBackend* Impl;
 };
 
 template <typename... TArgs>
@@ -489,19 +425,17 @@ struct TSelectTypes : public TArgs... {
 /// rename
 template <typename TCollection, typename... TArgs>
 struct TSelectNames {
-    using TThisTypes = TSelectTypes<typename TArgs::Type::template TReader<TCollection>...>;
-    //using TThisTypes = TSelectTypes<typename TArgs::Type::TReader...>;
+    /// todo how to typedef variadic template???
+    using TThisTypes = TSelectTypes<typename TCollection::template TLink<TArgs>::TReader...>;
 
-    TSelectNames(TSearchImpl* impl) : Impl(impl) {
-        [](...){}((TCollectionBinding<TCollection, typename TArgs::Type>())...);
-    }
+    TSelectNames(TQueryBackend* backend) : Impl(backend) {}
 
     TGroupContext<TCollection, TThisTypes> Group() {
-        [](...){}((TArgs::Request(Impl), 0)...);
+        [](...){}((TCollection::template TLink<TArgs>::Request(Impl), 0)...);
         return {Impl};
     }
 
-    TSearchImpl* Impl;
+    TQueryBackend* Impl;
 };
 
 template <typename TCollection>
@@ -511,14 +445,14 @@ struct TSelectContext {
     template <typename... TArgs>
     TSelectNames<TCollection, TArgs...> Fields(TArgs...) {
         /// check args from collection
-        return {&Impl}; /// pass impl to ctor
+        return {&Impl}; /// pass backend to ctor
     }
 
 public:
-    TSelectContext(TSearchImpl& impl) : Impl(impl) {}
+    TSelectContext(TQueryBackend& backend) : Impl(backend) {}
 
 private:
-    TSearchImpl& Impl;
+    TQueryBackend& Impl;
 };
 
 struct TSearchSession {
@@ -531,18 +465,16 @@ struct TSearchSession {
         Impl.search();
     }
 
-    TSearchImpl Impl;
+    TQueryBackend Impl;
 };
 
-/// todo:
-/// return document iterator
-/// add groupping with cache
-/// optimize query tree
+/* todo:
+ - passing remaining attrs: many sp
+*/
 
 int main(int argc, const char * argv[])
 {
     const auto rids = std::set<std::string>{"213", "225"};
-    const char* glFilter = "1234:345";
     TSearchSession ctx;
     auto offers = ctx
         .Select(Offers)
@@ -554,7 +486,6 @@ int main(int argc, const char * argv[])
             (SalesFlag == "1" || SalesFlag == "2")
             && ShopId == "123"
             && Region == "213"
-            && GLParams == glFilter
         );
 
     auto models = ctx
