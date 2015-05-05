@@ -132,29 +132,6 @@ static void Filter(TQueryBackend* backend, const char* value) {                 
         FIELD_REQUEST()                                                                 \
     FIELD_END()
 
-DECLARE_FIELD(OfferId)
-DECLARE_FIELD(ShopId)
-DECLARE_FIELD(Title)
-DECLARE_FIELD(SalesFlag)
-DECLARE_FIELD(Region)
-DECLARE_FIELD(MagicId)
-
-COLLECTION_BEGIN(Offers, "SHOP")
-    GROUPPING_ATTR(OfferId, "offer_id")
-    PLAIN_PROPERTY(Title, "title")
-    SEARCH_LITERAL(SalesFlag, "sales")
-    SEARCH_LITERAL(ShopId, "shop_id")
-    SEARCH_LITERAL(Region, "region")
-    GROUPPING_ATTR(MagicId, "magic_id")
-COLLECTION_END()
-
-COLLECTION_BEGIN(Models, "MODEL")
-    SEARCH_LITERAL(ShopId, "shop_id")
-    GROUPPING_ATTR(MagicId, "magic_id")
-COLLECTION_END()
-
-/// end of custom schema
-
 template <typename TCondition1, typename TCondition2>
 struct TConditionOr {
     template <typename TCollection>
@@ -223,8 +200,8 @@ TConditionAnd<TCondition1, TCondition2> operator&&(TCondition1 lhs, TCondition2 
 }
 
 struct TSearchServiceBase {
-    TSearchServiceBase(TQueryBackend* backend) : Impl(backend) {}
-    TQueryBackend* Impl;
+    TSearchServiceBase(TQueryBackend* backend) : Backend(backend) {}
+    TQueryBackend* Backend;
 };
 
 template <typename TRequestAttrs>
@@ -239,7 +216,7 @@ struct TDocIterator {
     using TThis = TDocIterator<TRequestAttrs>;
 
     TDocIterator(TQueryBackend* backend, const char* groupName, size_t groupIdx, size_t start)
-        : Impl(backend)
+        : Backend(backend)
         , Current(backend, groupName, groupIdx, start)
         , Counter(start)
         , GroupName(groupName)
@@ -256,7 +233,7 @@ struct TDocIterator {
     }
 
     TDocIterator& operator++() {
-        Current = TElement(Impl, GroupName, GroupIdx, ++Counter);
+        Current = TElement(Backend, GroupName, GroupIdx, ++Counter);
         return *this;
     }
 
@@ -269,7 +246,7 @@ struct TDocIterator {
     }
 
     /// use optional
-    TQueryBackend* Impl;
+    TQueryBackend* Backend;
     TElement Current;
     size_t Counter = 0;
     const char* GroupName = nullptr;
@@ -304,7 +281,7 @@ struct TDocRangeIterator {
     using TThis = TDocRangeIterator<TRequestAttrs>;
 
     TDocRangeIterator(TQueryBackend* backend, const char* groupName, size_t start)
-        : Impl(backend)
+        : Backend(backend)
         , Current(backend, groupName, start)
         , Counter(start)
         , GroupName(groupName)
@@ -320,7 +297,7 @@ struct TDocRangeIterator {
     }
 
     TThis& operator++() {
-        Current = TElement(Impl, GroupName, ++Counter);
+        Current = TElement(Backend, GroupName, ++Counter);
         return *this;
     }
 
@@ -332,7 +309,7 @@ struct TDocRangeIterator {
         return Counter == other.Counter;
     }
 
-    TQueryBackend* Impl;
+    TQueryBackend* Backend;
     TElement Current;
     size_t Counter = 0;
     const char* GroupName = nullptr;
@@ -368,7 +345,7 @@ struct TGroupRange {
 
 template <typename TRequestAttrs, typename TGroupAttrs, typename TCollection>
 struct TSearchResult {
-    TSearchResult(TQueryBackend* backend) : Impl(backend) {
+    TSearchResult(TQueryBackend* backend) : Backend(backend) {
     }
 
     template <typename TGroup>
@@ -378,13 +355,12 @@ struct TSearchResult {
         TGroupAttrs* fake;
         (void)static_cast<TGroup*>(fake);
 
-        return TGroupRange<TRequestAttrs>(Impl, TCollection::template TLink<TGroup>::Name);
+        return TGroupRange<TRequestAttrs>(Backend, TCollection::template TLink<TGroup>::Name);
     }
 
-    TQueryBackend* Impl;
+    TQueryBackend* Backend;
 };
 
-/// rename Attr -> Field
 template <typename TParent, typename TAttr, typename TCollection, typename TRequestAttrs>
 struct TGroupAttr : public TParent, public TAttr {
     using TThis = TGroupAttr<TParent, TAttr, TCollection, TRequestAttrs>;
@@ -393,90 +369,105 @@ struct TGroupAttr : public TParent, public TAttr {
 
     template <typename TGroup>
     TGroupAttr<TThis, TGroup, TCollection, TRequestAttrs> By(TGroup, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TCollection::template TLink<TGroup>::Group(TSearchServiceBase::Impl, docsToFetch, groupsToFetch);
-        return {TSearchServiceBase::Impl};
+        TCollection::template TLink<TGroup>::Group(TSearchServiceBase::Backend, docsToFetch, groupsToFetch);
+        return {TSearchServiceBase::Backend};
     }
 
     template <typename TCondition>
     TSearchResult<TRequestAttrs, TThis, TCollection> Where(TCondition cond) {
-        cond.template Apply<TCollection>(TSearchServiceBase::Impl);
-        return {TSearchServiceBase::Impl};
+        cond.template Apply<TCollection>(TSearchServiceBase::Backend);
+        return {TSearchServiceBase::Backend};
     }
 };
 
 template <typename TCollection, typename TRequestAttrs>
 struct TGroupContext {
-    TGroupContext(TQueryBackend* backend) : Impl(backend) {}
+    TGroupContext(TQueryBackend* backend) : Backend(backend) {}
 
     template <typename TAttr>
     TGroupAttr<TSearchServiceBase, TAttr, TCollection, TRequestAttrs>
     By(TAttr, size_t docsToFetch, size_t groupsToFetch = 1) {
-        TCollection::template TLink<TAttr>::Group(Impl, docsToFetch, groupsToFetch);
-        return {Impl};
+        TCollection::template TLink<TAttr>::Group(Backend, docsToFetch, groupsToFetch);
+        return {Backend};
     }
 
-    TQueryBackend* Impl;
+    TQueryBackend* Backend;
 };
 
 template <typename... TArgs>
 struct TSelectTypes : public TArgs... {
 };
 
-/// rename
 template <typename TCollection, typename... TArgs>
 struct TSelectNames {
-    /// todo how to typedef variadic template???
     using TThisTypes = TSelectTypes<typename TCollection::template TLink<TArgs>::TReader...>;
 
-    TSelectNames(TQueryBackend* backend) : Impl(backend) {}
+    TSelectNames(TQueryBackend* backend) : Backend(backend) {}
 
     TGroupContext<TCollection, TThisTypes> Group() {
-        [](...){}((TCollection::template TLink<TArgs>::Request(Impl), 0)...);
-        return {Impl};
+        [](...){}((TCollection::template TLink<TArgs>::Request(Backend), 0)...);
+        return {Backend};
     }
 
-    TQueryBackend* Impl;
+    TQueryBackend* Backend;
 };
 
 template <typename TCollection>
 struct TSelectContext {
-    /// make a request with attrs dependent
-
     template <typename... TArgs>
     TSelectNames<TCollection, TArgs...> Fields(TArgs...) {
-        /// check args from collection
-        return {&Impl}; /// pass backend to ctor
+        return {&Backend};
     }
 
 public:
-    TSelectContext(TQueryBackend& backend) : Impl(backend) {}
+    TSelectContext(TQueryBackend& backend) : Backend(backend) {}
 
 private:
-    TQueryBackend& Impl;
+    TQueryBackend& Backend;
 };
 
 struct TSearchSession {
     template <typename TCollection>
     TSelectContext<TCollection> Select(TCollection) {
-        return {Impl};
+        return {Backend};
     }
 
     void Fetch() {
-        Impl.search();
+        Backend.search();
     }
 
-    TQueryBackend Impl;
+    TQueryBackend Backend;
 };
 
 /* todo:
  - passing remaining attrs: many sp
 */
 
+DECLARE_FIELD(OfferId)
+DECLARE_FIELD(ShopId)
+DECLARE_FIELD(Title)
+DECLARE_FIELD(SalesFlag)
+DECLARE_FIELD(Region)
+DECLARE_FIELD(MagicId)
+
+COLLECTION_BEGIN(Offers, "SHOP")
+    GROUPPING_ATTR(OfferId, "offer_id")
+    PLAIN_PROPERTY(Title, "title")
+    SEARCH_LITERAL(SalesFlag, "sales")
+    SEARCH_LITERAL(ShopId, "shop_id")
+    SEARCH_LITERAL(Region, "region")
+    GROUPPING_ATTR(MagicId, "magic_id")
+COLLECTION_END()
+
+COLLECTION_BEGIN(Models, "MODEL")
+    SEARCH_LITERAL(ShopId, "shop_id")
+    GROUPPING_ATTR(MagicId, "magic_id")
+COLLECTION_END()
+
 int main(int argc, const char * argv[])
 {
-    const auto rids = std::set<std::string>{"213", "225"};
-    TSearchSession ctx;
-    auto offers = ctx
+    TSearchSession session;
+    auto offers = session
         .Select(Offers)
             .Fields(OfferId, ShopId, Title)
         .Group()
@@ -488,14 +479,14 @@ int main(int argc, const char * argv[])
             && Region == "213"
         );
 
-    auto models = ctx
+    auto models = session
         .Select(Models)
             .Fields(ShopId)
         .Group()
             .By(MagicId, 1, 1)
         .Where(ShopId == "123");
 
-    ctx.Fetch();
+    session.Fetch();
 
     for (auto group : offers.Group(MagicId)) {
         for (auto offer : group) {
